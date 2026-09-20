@@ -1,7 +1,6 @@
 import requests
 
 from config import BASE_RPC_URL
-
 from database import (
     init_db,
     save_trade,
@@ -16,6 +15,13 @@ USDC_ADDRESS = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 TRANSFER_TOPIC = (
     "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a9df523b3ef"
 )
+
+CHUNK_SIZE = 10
+
+# Son testte taranmış fakat analiz edilememiş aralık.
+# Backfill tamamlandıktan sonra None yapılacak.
+BACKFILL_START = 51569194
+BACKFILL_END = 51569821
 
 TOKEN_CACHE = {}
 
@@ -53,13 +59,14 @@ def get_latest_block():
     return int(result, 16)
 
 
-def get_transfer_logs(start_block, end_block):
+def get_usdc_logs(start_block, end_block):
 
     print(
-        "TEST: USDC Transfer logları aranıyor..."
+        f"USDC logları aranıyor: "
+        f"{start_block} -> {end_block}"
     )
 
-    result = rpc(
+    return rpc(
         "eth_getLogs",
         [{
             "fromBlock": hex(start_block),
@@ -68,28 +75,44 @@ def get_transfer_logs(start_block, end_block):
         }]
     )
 
-    print(
-        "TEST: USDC log sayısı:",
-        len(result)
-    )
-
-    return result
-
 
 def get_transaction(tx_hash):
 
     return rpc(
         "eth_getTransactionByHash",
+        [tx_hash]
+    )
+
+
+def get_transaction_receipt(tx_hash):
+
+    return rpc(
+        "eth_getTransactionReceipt",
+        [tx_hash]
+    )
+
+
+def get_block_timestamp(block_number):
+
+    result = rpc(
+        "eth_getBlockByNumber",
         [
-            tx_hash
+            hex(block_number),
+            False
         ]
+    )
+
+    return int(
+        result["timestamp"],
+        16
     )
 
 
 def decode_address(topic):
 
     return (
-        "0x" + topic[-40:]
+        "0x" +
+        topic[-40:]
     ).lower()
 
 
@@ -100,11 +123,10 @@ def decode_amount(raw_amount, decimals):
 
     try:
 
-        return int(
-            raw_amount,
-            16
-        ) / (
-            10 ** decimals
+        return (
+            int(raw_amount, 16)
+            /
+            (10 ** decimals)
         )
 
     except Exception:
@@ -114,17 +136,21 @@ def decode_amount(raw_amount, decimals):
 
 def decode_abi_string(data):
 
+    if not data or data == "0x":
+        return ""
+
     try:
 
-        if not data or data == "0x":
-            return ""
+        raw = bytes.fromhex(data[2:])
 
-        raw = bytes.fromhex(
-            data[2:]
-        )
+        if len(raw) == 32:
 
-        # Normal ABI dynamic string
-        if len(raw) >= 96:
+            return raw.rstrip(b"\x00").decode(
+                "utf-8",
+                errors="ignore"
+            )
+
+        if len(raw) >= 64:
 
             offset = int.from_bytes(
                 raw[0:32],
@@ -141,34 +167,26 @@ def decode_abi_string(data):
                 start = offset + 32
                 end = start + length
 
-                if end <= len(raw):
-
-                    return raw[start:end].decode(
-                        "utf-8",
-                        errors="ignore"
-                    )
-
-        # bytes32 style
-        if len(raw) == 32:
-
-            return raw.rstrip(
-                b"\x00"
-            ).decode(
-                "utf-8",
-                errors="ignore"
-            )
-
-        return ""
+                return raw[start:end].decode(
+                    "utf-8",
+                    errors="ignore"
+                )
 
     except Exception:
 
-        return ""
+        pass
+
+    return ""
 
 
 def get_token_metadata(token_address):
 
     token_address = token_address.lower()
 
+    if token_address in TOKEN_CACHE:
+        return TOKEN_CACHE[token_address]
+
+    # USDC sabit metadata
     if token_address == USDC_ADDRESS:
 
         metadata = {
@@ -181,102 +199,73 @@ def get_token_metadata(token_address):
 
         return metadata
 
-    if token_address in TOKEN_CACHE:
-
-        return TOKEN_CACHE[token_address]
-
     try:
 
-        decimals_data = rpc(
+        decimals_result = rpc(
             "eth_call",
-            [
-                {
-                    "to": token_address,
-                    "data": "0x313ce567"
-                },
-                "latest"
-            ]
+            [{
+                "to": token_address,
+                "data": "0x313ce567"
+            }, "latest"]
         )
 
         decimals = int(
-            decimals_data,
+            decimals_result,
             16
         )
 
-        symbol = ""
+    except Exception:
 
-        try:
+        decimals = None
 
-            symbol_data = rpc(
-                "eth_call",
-                [
-                    {
-                        "to": token_address,
-                        "data": "0x95d89b41"
-                    },
-                    "latest"
-                ]
-            )
+    symbol = ""
 
-            symbol = decode_abi_string(
-                symbol_data
-            )
+    try:
 
-        except Exception:
-            pass
-
-        name = ""
-
-        try:
-
-            name_data = rpc(
-                "eth_call",
-                [
-                    {
-                        "to": token_address,
-                        "data": "0x06fdde03"
-                    },
-                    "latest"
-                ]
-            )
-
-            name = decode_abi_string(
-                name_data
-            )
-
-        except Exception:
-            pass
-
-        metadata = {
-            "decimals": decimals,
-            "symbol": symbol,
-            "name": name
-        }
-
-        TOKEN_CACHE[token_address] = metadata
-
-        return metadata
-
-    except Exception as e:
-
-        print(
-            "Token metadata alınamadı:",
-            token_address,
-            e
+        result = rpc(
+            "eth_call",
+            [{
+                "to": token_address,
+                "data": "0x95d89b41"
+            }, "latest"]
         )
 
-        metadata = {
-            "decimals": None,
-            "symbol": "",
-            "name": ""
-        }
+        symbol = decode_abi_string(result)
 
-        TOKEN_CACHE[token_address] = metadata
+    except Exception:
 
-        return metadata
+        pass
+
+    name = ""
+
+    try:
+
+        result = rpc(
+            "eth_call",
+            [{
+                "to": token_address,
+                "data": "0x06fdde03"
+            }, "latest"]
+        )
+
+        name = decode_abi_string(result)
+
+    except Exception:
+
+        pass
+
+    metadata = {
+        "decimals": decimals,
+        "symbol": symbol,
+        "name": name
+    }
+
+    TOKEN_CACHE[token_address] = metadata
+
+    return metadata
 
 
-def build_transfer_data(log):
+def parse_transfer_log(log):
 
     topics = log.get(
         "topics",
@@ -286,10 +275,12 @@ def build_transfer_data(log):
     if len(topics) < 3:
         return None
 
-    if topics[0].lower() != TRANSFER_TOPIC:
+    topic0 = topics[0].lower()
+
+    if topic0 != TRANSFER_TOPIC:
         return None
 
-    token_address = log.get(
+    token = log.get(
         "address",
         ""
     ).lower()
@@ -308,7 +299,7 @@ def build_transfer_data(log):
     )
 
     return {
-        "token": token_address,
+        "token": token,
         "from": from_address,
         "to": to_address,
         "raw_amount": raw_amount,
@@ -326,7 +317,6 @@ def build_transfer_data(log):
 
 def analyze_transaction(
     tx_hash,
-    transfers,
     block_timestamp
 ):
 
@@ -345,120 +335,160 @@ def analyze_transaction(
     if not trader:
         return False
 
+    receipt = get_transaction_receipt(
+        tx_hash
+    )
+
+    if not receipt:
+        return False
+
+    logs = receipt.get(
+        "logs",
+        []
+    )
+
+    transfers = []
+
+    for log in logs:
+
+        transfer = parse_transfer_log(
+            log
+        )
+
+        if transfer:
+
+            transfers.append(
+                transfer
+            )
+
+    if not transfers:
+        return False
+
+    sent_usdc = []
+    received_usdc = []
+
     sent_tokens = []
     received_tokens = []
 
     for transfer in transfers:
 
-        token_address = transfer["token"]
+        token = transfer["token"]
 
-        metadata = get_token_metadata(
-            token_address
+        if token == USDC_ADDRESS:
+
+            if transfer["from"] == trader:
+
+                sent_usdc.append(
+                    transfer
+                )
+
+            if transfer["to"] == trader:
+
+                received_usdc.append(
+                    transfer
+                )
+
+        else:
+
+            if transfer["from"] == trader:
+
+                sent_tokens.append(
+                    transfer
+                )
+
+            if transfer["to"] == trader:
+
+                received_tokens.append(
+                    transfer
+                )
+
+    # BUY:
+    # Trader USDC gönderiyor
+    # Trader token alıyor
+
+    if sent_usdc and received_tokens:
+
+        side = "BUY"
+
+        usdc_transfer = max(
+            sent_usdc,
+            key=lambda x: int(
+                x["raw_amount"],
+                16
+            )
         )
 
-        amount = decode_amount(
-            transfer["raw_amount"],
-            metadata["decimals"]
+        token_transfer = received_tokens[0]
+
+    # SELL:
+    # Trader token gönderiyor
+    # Trader USDC alıyor
+
+    elif received_usdc and sent_tokens:
+
+        side = "SELL"
+
+        usdc_transfer = max(
+            received_usdc,
+            key=lambda x: int(
+                x["raw_amount"],
+                16
+            )
         )
 
-        if amount is None:
-            continue
+        token_transfer = sent_tokens[0]
 
-        token_data = {
-            "address": token_address,
-            "symbol": metadata["symbol"],
-            "name": metadata["name"],
-            "amount": amount,
-            "decimals": metadata["decimals"]
-        }
-
-        if transfer["from"] == trader:
-
-            sent_tokens.append(
-                token_data
-            )
-
-        if transfer["to"] == trader:
-
-            received_tokens.append(
-                token_data
-            )
-
-    if not sent_tokens and not received_tokens:
+    else:
 
         return False
 
-    usd_value = None
+    usd_value = decode_amount(
+        usdc_transfer["raw_amount"],
+        6
+    )
 
-    for token in (
-        sent_tokens +
-        received_tokens
-    ):
-
-        if token["address"] == USDC_ADDRESS:
-
-            usd_value = token["amount"]
-
-            break
-
-    # Şimdilik sadece USDC karşılığı olan swapları kaydet.
     if usd_value is None:
-
         return False
 
-    side = None
-    token_symbol = None
-    token_address = None
-    token_amount = None
+    metadata = get_token_metadata(
+        token_transfer["token"]
+    )
 
-    # Önce gönderilen tarafta USDC dışındaki token
-    # varsa SELL olarak değerlendir.
-    for token in sent_tokens:
+    token_amount = decode_amount(
+        token_transfer["raw_amount"],
+        metadata["decimals"]
+    )
 
-        if token["address"] != USDC_ADDRESS:
-
-            side = "SELL"
-            token_symbol = token["symbol"]
-            token_address = token["address"]
-            token_amount = token["amount"]
-
-            break
-
-    # Gönderilen tarafta token yoksa alınan tarafta
-    # USDC dışındaki token BUY olarak değerlendirilir.
-    if side is None:
-
-        for token in received_tokens:
-
-            if token["address"] != USDC_ADDRESS:
-
-                side = "BUY"
-                token_symbol = token["symbol"]
-                token_address = token["address"]
-                token_amount = token["amount"]
-
-                break
-
-    if side is None:
-
+    if token_amount is None:
         return False
 
     trade = {
+
         "tx_hash": tx_hash,
-        "block_number": int(
-            tx.get(
-                "blockNumber",
-                "0x0"
-            ),
-            16
-        ),
-        "timestamp": block_timestamp,
-        "trader": trader,
-        "token": token_address,
-        "symbol": token_symbol,
-        "side": side,
-        "amount_usd": usd_value,
-        "token_amount": token_amount
+
+        "block_number":
+            token_transfer["block_number"],
+
+        "timestamp":
+            block_timestamp,
+
+        "trader":
+            trader,
+
+        "token":
+            token_transfer["token"],
+
+        "symbol":
+            metadata["symbol"],
+
+        "side":
+            side,
+
+        "amount_usd":
+            usd_value,
+
+        "token_amount":
+            token_amount
     }
 
     saved = save_trade(
@@ -471,14 +501,21 @@ def analyze_transaction(
             trade
         )
 
-        print(
-            f"{side:4} | "
-            f"{token_symbol or 'UNKNOWN':12} | "
-            f"{usd_value:10.2f} USD | "
-            f"{trader}"
-        )
+        print()
+        print("====================================")
+        print("YENİ SWAP BULUNDU")
+        print("Trader:", trader)
+        print("Side:", side)
+        print("Token:", metadata["symbol"])
+        print("Token adresi:", token_transfer["token"])
+        print("Token miktarı:", token_amount)
+        print("USD:", usd_value)
+        print("TX:", tx_hash)
+        print("====================================")
 
-    return True
+        return True
+
+    return False
 
 
 def process_block_range(
@@ -486,249 +523,232 @@ def process_block_range(
     end_block
 ):
 
-    print()
-    print(
-        f"Transfer logları taranıyor: "
-        f"{start_block} -> {end_block}"
-    )
-
-    logs = get_transfer_logs(
+    logs = get_usdc_logs(
         start_block,
         end_block
     )
 
     print(
-        "Bulunan ERC20 Transfer log:",
+        "Toplam USDC log:",
         len(logs)
     )
 
-    transfers_by_tx = {}
+    transfer_logs = []
 
-    timestamps = {}
-
-    # Logları transaction bazında grupla.
     for log in logs:
 
-        transfer = build_transfer_data(
+        transfer = parse_transfer_log(
             log
         )
 
-        if transfer is None:
-            continue
+        if transfer:
 
-        tx_hash = transfer["tx_hash"]
+            transfer_logs.append(
+                transfer
+            )
 
-        if tx_hash not in transfers_by_tx:
+    print(
+        "USDC Transfer log:",
+        len(transfer_logs)
+    )
 
-            transfers_by_tx[tx_hash] = []
+    if not transfer_logs:
+        return 0
 
-        transfers_by_tx[tx_hash].append(
-            transfer
+    # Aynı transaction birden fazla USDC
+    # transferi içerebilir.
+    tx_hashes = set()
+
+    for transfer in transfer_logs:
+
+        tx_hashes.add(
+            transfer["tx_hash"]
         )
 
-    # Aynı aralıktaki blok zamanlarını almak için
-    # blokları ayrıca çekiyoruz.
-    block_timestamps = {}
+    print(
+        "Aday transaction:",
+        len(tx_hashes)
+    )
 
-    for block_number in range(
-        start_block,
-        end_block + 1
-    ):
-
-        try:
-
-            result = rpc(
-                "eth_getBlockByNumber",
-                [
-                    hex(block_number),
-                    False
-                ]
-            )
-
-            if result:
-
-                block_timestamps[block_number] = int(
-                    result["timestamp"],
-                    16
-                )
-
-        except Exception as e:
-
-            print(
-                "Blok zamanı alınamadı:",
-                block_number,
-                e
-            )
-
-            raise
+    # Timestamp cache
+    timestamp_cache = {}
 
     analyzed = 0
 
-    for tx_hash, transfers in transfers_by_tx.items():
-
-        if not transfers:
-            continue
-
-        block_number = transfers[0][
-            "block_number"
-        ]
-
-        block_timestamp = block_timestamps.get(
-            block_number
-        )
-
-        if block_timestamp is None:
-            continue
+    for tx_hash in tx_hashes:
 
         try:
 
+            tx = get_transaction(
+                tx_hash
+            )
+
+            if not tx:
+                continue
+
+            block_number = int(
+                tx["blockNumber"],
+                16
+            )
+
+            if block_number not in timestamp_cache:
+
+                timestamp_cache[
+                    block_number
+                ] = get_block_timestamp(
+                    block_number
+                )
+
+            timestamp = timestamp_cache[
+                block_number
+            ]
+
             if analyze_transaction(
                 tx_hash,
-                transfers,
-                block_timestamp
+                timestamp
             ):
 
                 analyzed += 1
 
-        except Exception as e:
+        except Exception as error:
 
             print(
                 "Transaction analiz hatası:",
-                tx_hash
+                tx_hash,
+                error
             )
-
-            print(e)
 
     return analyzed
 
 
 def main():
 
-    print(
-        "Base Alpha Scanner başlıyor..."
-    )
-
     init_db()
 
     latest = get_latest_block()
 
-    print(
-        "Base latest block:",
-        latest
-    )
+    print()
+    print("====================================")
+    print("BASE ALPHA SCANNER")
+    print("Latest block:", latest)
+    print("====================================")
 
-    last_scanned_block = get_last_scanned_block()
+    last_scanned = get_last_scanned_block()
 
-    if last_scanned_block is None:
+    # Önce kaçırılan eski aralığı tamamla.
+    if last_scanned is not None:
 
-        start_block = max(
-            0,
-            latest - 4
-        )
+        if (
+            last_scanned >= BACKFILL_START
+            and
+            last_scanned <= BACKFILL_END
+        ):
 
-        print(
-            "İlk çalışma. Son 5 blok taranıyor."
-        )
+            start_block = BACKFILL_START
+
+            print(
+                "BACKFILL aktif:",
+                BACKFILL_START,
+                "->",
+                BACKFILL_END
+            )
+
+        elif last_scanned < BACKFILL_START:
+
+            start_block = BACKFILL_START
+
+        else:
+
+            start_block = last_scanned + 1
 
     else:
 
-        start_block = (
-            last_scanned_block + 1
+        start_block = BACKFILL_START
+
+    # Backfill bittiyse normal çalışmaya geç.
+    scan_end = latest
+
+    if start_block <= BACKFILL_END:
+
+        scan_end = min(
+            BACKFILL_END,
+            latest
         )
 
-        print(
-            "Son taranan blok:",
-            last_scanned_block
-        )
+    print(
+        "Tarama başlangıcı:",
+        start_block
+    )
 
-        print(
-            "Buradan devam ediliyor:",
-            start_block
-        )
-
-    if start_block > latest:
-
-        print(
-            "Yeni blok yok."
-        )
-
-        return
+    print(
+        "Tarama bitişi:",
+        scan_end
+    )
 
     total_analyzed = 0
 
-    # Büyük aralıkları küçük parçalara böl.
-    # Böylece RPC limitlerine takılma ihtimali azalır.
-    CHUNK_SIZE = 10
+    current = start_block
 
-    current_block = start_block
-
-    while current_block <= latest:
+    while current <= scan_end:
 
         chunk_end = min(
-            current_block + CHUNK_SIZE - 1,
-            latest
+            current + CHUNK_SIZE - 1,
+            scan_end
+        )
+
+        print()
+        print(
+            "------------------------------------"
+        )
+
+        print(
+            "Chunk:",
+            current,
+            "->",
+            chunk_end
         )
 
         try:
 
             analyzed = process_block_range(
-                current_block,
+                current,
                 chunk_end
             )
 
             total_analyzed += analyzed
 
-            # Chunk tamamen başarılıysa state kaydet.
             save_last_scanned_block(
                 chunk_end
             )
 
             print(
-                f"Chunk tamamlandı: "
-                f"{current_block} -> {chunk_end}"
+                "Chunk tamamlandı."
             )
 
             print(
-                "Son taranan blok kaydedildi:",
-                chunk_end
+                "Bulunan swap:",
+                analyzed
             )
 
-            current_block = (
-                chunk_end + 1
-            )
+            current = chunk_end + 1
 
-        except Exception as e:
-
-            print()
-            print(
-                "CHUNK HATASI:"
-            )
+        except Exception as error:
 
             print(
-                f"{current_block} -> {chunk_end}"
-            )
-
-            print(e)
-
-            print()
-            print(
-                "Scanner bu noktada duruyor."
+                "CHUNK HATASI:",
+                error
             )
 
             break
 
     print()
+    print("====================================")
     print(
         "Toplam analiz edilen swap:",
         total_analyzed
     )
-
-    print()
-    print(
-        "Scanner tamamlandı."
-    )
+    print("====================================")
 
 
 if __name__ == "__main__":
-
     main()
