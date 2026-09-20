@@ -149,9 +149,105 @@ def get_block_receipts(block_number):
     )
 
 
-def get_receipts_for_blocks(
-    block_numbers
-):
+def get_receipts(tx_hashes):
+
+    receipts = {}
+
+    batch_size = 10
+
+    for start in range(
+        0,
+        len(tx_hashes),
+        batch_size
+    ):
+
+        batch = tx_hashes[
+            start:start + batch_size
+        ]
+
+        print(
+            "Receipt batch:",
+            start + 1,
+            "->",
+            start + len(batch)
+        )
+
+        for attempt in range(6):
+
+            try:
+
+                payload = []
+
+                for i, tx_hash in enumerate(batch):
+
+                    payload.append({
+                        "jsonrpc": "2.0",
+                        "method": "eth_getTransactionReceipt",
+                        "params": [tx_hash],
+                        "id": i
+                    })
+
+                response = requests.post(
+                    BASE_RPC_URL,
+                    json=payload,
+                    timeout=60
+                )
+
+                if response.status_code == 429:
+
+                    wait = 2 ** attempt
+
+                    print(
+                        "Receipt 429. Bekleniyor:",
+                        wait,
+                        "sn"
+                    )
+
+                    time.sleep(wait)
+
+                    continue
+
+                response.raise_for_status()
+
+                data = response.json()
+
+                for item in data:
+
+                    result = item.get(
+                        "result"
+                    )
+
+                    if result:
+
+                        tx_hash = batch[
+                            item["id"]
+                        ]
+
+                        receipts[
+                            tx_hash
+                        ] = result
+
+                break
+
+            except requests.RequestException as error:
+
+                if attempt == 5:
+
+                    raise
+
+                wait = 2 ** attempt
+
+                print(
+                    "Receipt RPC hatası:",
+                    error,
+                    "Bekleme:",
+                    wait,
+                    "sn"
+                )
+
+                time.sleep(wait)
+
+    return receipts
 
     receipts = {}
 
@@ -947,12 +1043,14 @@ def process_block_range(
     )
 
     # --------------------------------------------------------
-    # RECEIPTS
-    # --------------------------------------------------------
+# RECEIPTS
+# --------------------------------------------------------
 
-    receipts = get_receipts_for_blocks(
-        unique_blocks
+receipts = get_receipts(
+    list(
+        transactions.keys()
     )
+)
 
     print(
         "Receipt alındı:",
