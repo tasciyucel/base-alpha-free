@@ -157,7 +157,6 @@ def decode_string(data):
             data[2:]
         )
 
-        # ABI dynamic string
         if len(raw) >= 64:
 
             offset = int.from_bytes(
@@ -191,7 +190,6 @@ def decode_string(data):
                     if value:
                         return value
 
-        # bytes32 fallback
         value = raw[:32].rstrip(
             b"\x00"
         ).decode(
@@ -408,49 +406,44 @@ def main():
 
     init_db()
 
-   latest = get_latest_block()
-
-print(
-    "Base latest block:",
-    latest
-)
-
-blocks_to_scan = 5
-
-all_transactions = []
-
-for block_number in range(
-    latest - blocks_to_scan + 1,
-    latest + 1
-):
+    latest = get_latest_block()
 
     print(
-        "Blok taranıyor:",
-        block_number
+        "Base latest block:",
+        latest
     )
 
-    block = get_block(
-        block_number
-    )
+    blocks_to_scan = 5
 
-    block_transactions = block.get(
-        "transactions",
-        []
-    )
+    all_transactions = []
 
-    all_transactions.extend(
-        block_transactions
-    )
+    for block_number in range(
+        latest - blocks_to_scan + 1,
+        latest + 1
+    ):
 
-transactions = all_transactions
+        print(
+            "Blok taranıyor:",
+            block_number
+        )
 
-print(
-    "Toplam transaction sayısı:",
-    len(transactions)
-)
+        block = get_block(
+            block_number
+        )
+
+        block_transactions = block.get(
+            "transactions",
+            []
+        )
+
+        all_transactions.extend(
+            block_transactions
+        )
+
+    transactions = all_transactions
 
     print(
-        "Transaction sayısı:",
+        "Toplam transaction sayısı:",
         len(transactions)
     )
 
