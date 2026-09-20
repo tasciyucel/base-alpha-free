@@ -1,5 +1,10 @@
 import requests
 import time
+import sys
+
+print("SCANNER BAŞLADI", flush=True)
+import requests
+import time
 
 from config import BASE_RPC_URL
 from database import (
