@@ -1043,14 +1043,19 @@ def process_block_range(
     )
 
     # --------------------------------------------------------
-# RECEIPTS
-# --------------------------------------------------------
+    # RECEIPTS
+    # --------------------------------------------------------
 
-receipts = get_receipts(
-    list(
-        transactions.keys()
+    receipts = get_receipts(
+        list(
+            transactions.keys()
+        )
     )
-)
+
+    print(
+        "Receipt alındı:",
+        len(receipts)
+    )
 
     print(
         "Receipt alındı:",
