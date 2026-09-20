@@ -14,6 +14,10 @@ def init_db():
     db = connect()
     cur = db.cursor()
 
+    # ========================================================
+    # TRADES
+    # ========================================================
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,6 +49,10 @@ def init_db():
             ADD COLUMN token_amount REAL DEFAULT 0
         """)
 
+    # ========================================================
+    # WALLETS
+    # ========================================================
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS wallets (
             address TEXT PRIMARY KEY,
@@ -58,6 +66,10 @@ def init_db():
         )
     """)
 
+    # ========================================================
+    # ALERTS
+    # ========================================================
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS alerts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,6 +81,10 @@ def init_db():
         )
     """)
 
+    # ========================================================
+    # SCANNER STATE
+    # ========================================================
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS scanner_state (
             key TEXT PRIMARY KEY,
@@ -76,9 +92,26 @@ def init_db():
         )
     """)
 
+    # ========================================================
+    # TOKEN METADATA
+    # ========================================================
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS token_metadata (
+            address TEXT PRIMARY KEY,
+            symbol TEXT,
+            name TEXT,
+            decimals INTEGER
+        )
+    """)
+
     db.commit()
     db.close()
 
+
+# ============================================================
+# TRADE
+# ============================================================
 
 def save_trade(trade):
 
@@ -99,7 +132,7 @@ def save_trade(trade):
                 amount_usd,
                 token_amount
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             trade["tx_hash"],
             trade["block_number"],
@@ -125,6 +158,10 @@ def save_trade(trade):
         db.close()
 
 
+# ============================================================
+# WALLET
+# ============================================================
+
 def update_wallet(trade):
 
     db = connect()
@@ -147,12 +184,27 @@ def update_wallet(trade):
 
         ON CONFLICT(address)
         DO UPDATE SET
-            trades = trades + 1,
-            buys = buys + excluded.buys,
-            sells = sells + excluded.sells,
-            buy_usd = buy_usd + excluded.buy_usd,
-            sell_usd = sell_usd + excluded.sell_usd,
-            last_seen = excluded.last_seen
+
+            trades =
+                trades + 1,
+
+            buys =
+                buys + excluded.buys,
+
+            sells =
+                sells + excluded.sells,
+
+            buy_usd =
+                buy_usd + excluded.buy_usd,
+
+            sell_usd =
+                sell_usd + excluded.sell_usd,
+
+            first_seen =
+                MIN(first_seen, excluded.first_seen),
+
+            last_seen =
+                MAX(last_seen, excluded.last_seen)
     """, (
         address,
 
@@ -175,6 +227,85 @@ def update_wallet(trade):
     db.commit()
     db.close()
 
+
+# ============================================================
+# TOKEN METADATA
+# ============================================================
+
+def get_token_metadata(address):
+
+    db = connect()
+    cur = db.cursor()
+
+    cur.execute("""
+        SELECT
+            symbol,
+            name,
+            decimals
+        FROM token_metadata
+        WHERE address = ?
+    """, (
+        address.lower(),
+    ))
+
+    row = cur.fetchone()
+
+    db.close()
+
+    if row is None:
+        return None
+
+    return {
+        "symbol": row[0] or "",
+        "name": row[1] or "",
+        "decimals": row[2]
+    }
+
+
+def save_token_metadata(
+    address,
+    symbol,
+    name,
+    decimals
+):
+
+    db = connect()
+    cur = db.cursor()
+
+    cur.execute("""
+        INSERT INTO token_metadata (
+            address,
+            symbol,
+            name,
+            decimals
+        )
+        VALUES (?, ?, ?, ?)
+
+        ON CONFLICT(address)
+        DO UPDATE SET
+
+            symbol =
+                excluded.symbol,
+
+            name =
+                excluded.name,
+
+            decimals =
+                excluded.decimals
+    """, (
+        address.lower(),
+        symbol or "",
+        name or "",
+        decimals
+    ))
+
+    db.commit()
+    db.close()
+
+
+# ============================================================
+# SCANNER STATE
+# ============================================================
 
 def get_last_scanned_block():
 
@@ -211,6 +342,7 @@ def save_last_scanned_block(block_number):
             'last_scanned_block',
             ?
         )
+
         ON CONFLICT(key)
         DO UPDATE SET
             value = excluded.value
