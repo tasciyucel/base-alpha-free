@@ -23,18 +23,17 @@ def main():
             first_seen,
             last_seen
         FROM wallets
-        ORDER BY trades DESC
+        ORDER BY
+            (buy_usd + sell_usd) DESC
         LIMIT 20
     """)
 
     wallets = cur.fetchall()
 
     print()
-    print("=" * 100)
-    print(
-        "WALLET İSTATİSTİKLERİ"
-    )
-    print("=" * 100)
+    print("=" * 110)
+    print("WALLET İSTATİSTİKLERİ")
+    print("=" * 110)
 
     if not wallets:
 
@@ -57,6 +56,10 @@ def main():
             first_seen,
             last_seen
         ) = wallet
+
+        total_volume = (
+            buy_usd + sell_usd
+        )
 
         print()
         print(
@@ -90,6 +93,11 @@ def main():
         )
 
         print(
+            "Toplam hacim USD:",
+            total_volume
+        )
+
+        print(
             "İlk görülme:",
             first_seen
         )
@@ -100,7 +108,7 @@ def main():
         )
 
     print()
-    print("=" * 100)
+    print("=" * 110)
 
     db.close()
 
