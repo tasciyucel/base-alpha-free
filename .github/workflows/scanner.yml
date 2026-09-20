@@ -33,6 +33,7 @@ jobs:
           BASE_RPC_URL: https://mainnet.base.org
         run: |
           python scanner.py
+          python wallet_stats.py
 
       - name: Save database
         run: |
