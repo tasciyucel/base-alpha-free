@@ -221,7 +221,6 @@ def get_token_metadata(token):
         return TOKEN_CACHE[token]
 
     # Base USDC: decimals = 6
-    # RPC'den okumaya gerek yok.
     if token == USDC_ADDRESS:
 
         metadata = {
@@ -335,8 +334,6 @@ def decode_amount(data, decimals):
         16
     )
 
-    # Ondalık bilgisi bilinmiyorsa
-    # ham değeri insan okunabilir miktar gibi kullanma.
     if decimals is None:
         return None
 
@@ -413,7 +410,8 @@ def calculate_usd_value(sent, received):
 
         if item["token"].lower() == USDC_ADDRESS:
 
-            return item["amount"]
+            if item["amount"] is not None:
+                return item["amount"]
 
     return None
 
@@ -426,7 +424,7 @@ def main():
 
     init_db()
 
-        latest = get_latest_block()
+    latest = get_latest_block()
 
     print(
         "Base latest block:",
@@ -568,7 +566,6 @@ def main():
             received
         )
 
-        # BUY / SELL belirle ve veritabanına kaydet
         if usd_value is not None:
 
             usdc_sent = next(
@@ -615,6 +612,9 @@ def main():
                 context = tx_context[tx_hash]
 
                 for item in token_items:
+
+                    if item["amount"] is None:
+                        continue
 
                     trade = {
                         "tx_hash": tx_hash,
@@ -714,7 +714,7 @@ def main():
         if found >= 5:
             break
 
-        print("=" * 70)
+    print("=" * 70)
 
     print(
         "Analiz edilen swap:",
