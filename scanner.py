@@ -1,3 +1,4 @@
+import time
 import requests
 
 from config import BASE_RPC_URL
@@ -13,35 +14,46 @@ UNISWAP_UNIVERSAL_ROUTER = (
     "0x6ff5693b99212da76ad316178a184ab56d299b43"
 )
 
-WETH = (
-    "0x4200000000000000000000000000000000000006"
-)
-
 
 TOKEN_CACHE = {}
 
 
-def rpc(method, params=None):
+def rpc(method, params=None, retries=3):
 
-    response = requests.post(
-        BASE_RPC_URL,
-        json={
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params or [],
-            "id": 1
-        },
-        timeout=30
-    )
+    last_error = None
 
-    response.raise_for_status()
+    for attempt in range(retries):
 
-    data = response.json()
+        try:
 
-    if "error" in data:
-        raise RuntimeError(data["error"])
+            response = requests.post(
+                BASE_RPC_URL,
+                json={
+                    "jsonrpc": "2.0",
+                    "method": method,
+                    "params": params or [],
+                    "id": 1
+                },
+                timeout=30
+            )
 
-    return data["result"]
+            response.raise_for_status()
+
+            data = response.json()
+
+            if "error" in data:
+                raise RuntimeError(data["error"])
+
+            return data["result"]
+
+        except Exception as e:
+
+            last_error = e
+
+            if attempt < retries - 1:
+                time.sleep(1)
+
+    raise last_error
 
 
 def get_latest_block():
@@ -89,15 +101,40 @@ def eth_call(token, selector):
     )
 
 
+def decode_uint256(data):
+
+    if not data or data == "0x":
+        return None
+
+    try:
+
+        clean = data[2:]
+
+        if len(clean) < 64:
+            return None
+
+        return int(
+            clean[-64:],
+            16
+        )
+
+    except Exception:
+
+        return None
+
+
 def decode_string(data):
 
     if not data or data == "0x":
         return None
 
-    raw = bytes.fromhex(data[2:])
-
     try:
 
+        raw = bytes.fromhex(
+            data[2:]
+        )
+
+        # ABI dynamic string
         if len(raw) >= 64:
 
             offset = int.from_bytes(
@@ -105,7 +142,10 @@ def decode_string(data):
                 "big"
             )
 
-            if offset + 32 <= len(raw):
+            if (
+                offset + 32 <= len(raw)
+                and offset < len(raw)
+            ):
 
                 length = int.from_bytes(
                     raw[offset:offset + 32],
@@ -115,63 +155,92 @@ def decode_string(data):
                 start = offset + 32
                 end = start + length
 
-                if end <= len(raw):
+                if (
+                    length > 0
+                    and end <= len(raw)
+                ):
 
                     value = raw[start:end].decode(
                         "utf-8",
                         errors="ignore"
-                    )
+                    ).strip("\x00")
 
                     if value:
-                        return value.strip("\x00")
+                        return value
 
-        value = raw.rstrip(
+        # bytes32 fallback
+        value = raw[:32].rstrip(
             b"\x00"
         ).decode(
             "utf-8",
             errors="ignore"
-        )
+        ).strip()
 
-        return value or None
+        if value:
+            return value
 
     except Exception:
 
-        return None
+        pass
+
+    return None
 
 
 def get_token_metadata(token):
 
     token = token.lower()
 
+    # Cache sadece başarılı metadata için kullanılıyor.
     if token in TOKEN_CACHE:
         return TOKEN_CACHE[token]
 
+    name = None
+    symbol = None
+    decimals = None
+
+    # NAME
     try:
+
+        name_data = eth_call(
+            token,
+            "0x06fdde03"
+        )
 
         name = decode_string(
-            eth_call(
-                token,
-                "0x06fdde03"
-            )
+            name_data
         )
 
-    except Exception:
+    except Exception as e:
 
-        name = None
+        print(
+            "name() okunamadı:",
+            token,
+            "|",
+            str(e)
+        )
 
+    # SYMBOL
     try:
 
-        symbol = decode_string(
-            eth_call(
-                token,
-                "0x95d89b41"
-            )
+        symbol_data = eth_call(
+            token,
+            "0x95d89b41"
         )
 
-    except Exception:
+        symbol = decode_string(
+            symbol_data
+        )
 
-        symbol = None
+    except Exception as e:
 
+        print(
+            "symbol() okunamadı:",
+            token,
+            "|",
+            str(e)
+        )
+
+    # DECIMALS
     try:
 
         decimals_data = eth_call(
@@ -179,14 +248,27 @@ def get_token_metadata(token):
             "0x313ce567"
         )
 
-        decimals = int(
-            decimals_data,
-            16
+        decimals = decode_uint256(
+            decimals_data
         )
 
-    except Exception:
+        if decimals is not None:
 
-        decimals = None
+            print(
+                "DECIMALS:",
+                token,
+                "=>",
+                decimals
+            )
+
+    except Exception as e:
+
+        print(
+            "decimals() okunamadı:",
+            token,
+            "|",
+            str(e)
+        )
 
     metadata = {
         "address": token,
@@ -195,7 +277,11 @@ def get_token_metadata(token):
         "decimals": decimals
     }
 
-    TOKEN_CACHE[token] = metadata
+    # En az decimals başarılıysa cache'e al.
+    # Böylece geçici RPC hatasında None kalıcı olmaz.
+    if decimals is not None:
+
+        TOKEN_CACHE[token] = metadata
 
     return metadata
 
@@ -211,6 +297,7 @@ def decode_amount(data, decimals):
     )
 
     if decimals is None:
+
         return raw_amount
 
     return raw_amount / (
