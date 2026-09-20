@@ -45,8 +45,7 @@ jobs:
           BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}
 
         run: |
-          python -u scanner.py
-          python -u wallet_stats.py
+          python -u scanner_test.py
 
 
       - name: Save database
