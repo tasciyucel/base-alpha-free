@@ -47,7 +47,7 @@ def rpc(method, params, retries=5):
 
             if response.status_code == 429:
 
-                wait = 2 ** attempt
+                wait = min(2 ** attempt, 10)
 
                 print(
                     "429 rate limit. Bekleniyor:",
@@ -76,7 +76,7 @@ def rpc(method, params, retries=5):
             if attempt == retries - 1:
                 raise
 
-            wait = 2 ** attempt
+            wait = min(2 ** attempt, 10)
 
             print(
                 "RPC hatası. Bekleniyor:",
@@ -126,141 +126,44 @@ def get_usdc_logs(
 
 
 # ============================================================
-# ALCHEMY RECEIPTS
+# BLOCK RECEIPTS
 # ============================================================
 
-def get_block_receipts(block_number):
+def get_block_receipts(
+    block_number
+):
 
-    result = rpc(
-        "alchemy_getTransactionReceipts",
+    return rpc(
+        "eth_getBlockReceipts",
         [
             hex(block_number)
         ],
         retries=6
     )
 
-    if not result:
 
-        return []
-
-    return result.get(
-        "receipts",
-        []
-    )
-
-
-def get_receipts(tx_hashes):
+def get_receipts_for_blocks(
+    block_numbers,
+    candidate_tx_hashes
+):
 
     receipts = {}
 
-    batch_size = 10
-
-    for start in range(
-        0,
-        len(tx_hashes),
-        batch_size
-    ):
-
-        batch = tx_hashes[
-            start:start + batch_size
-        ]
-
-        print(
-            "Receipt batch:",
-            start + 1,
-            "->",
-            start + len(batch)
-        )
-
-        for attempt in range(6):
-
-            try:
-
-                payload = []
-
-                for i, tx_hash in enumerate(batch):
-
-                    payload.append({
-                        "jsonrpc": "2.0",
-                        "method": "eth_getTransactionReceipt",
-                        "params": [tx_hash],
-                        "id": i
-                    })
-
-                response = requests.post(
-                    BASE_RPC_URL,
-                    json=payload,
-                    timeout=60
-                )
-
-                if response.status_code == 429:
-
-                    wait = 2 ** attempt
-
-                    print(
-                        "Receipt 429. Bekleniyor:",
-                        wait,
-                        "sn"
-                    )
-
-                    time.sleep(wait)
-
-                    continue
-
-                response.raise_for_status()
-
-                data = response.json()
-
-                for item in data:
-
-                    result = item.get(
-                        "result"
-                    )
-
-                    if result:
-
-                        tx_hash = batch[
-                            item["id"]
-                        ]
-
-                        receipts[
-                            tx_hash
-                        ] = result
-
-                break
-
-            except requests.RequestException as error:
-
-                if attempt == 5:
-
-                    raise
-
-                wait = 2 ** attempt
-
-                print(
-                    "Receipt RPC hatası:",
-                    error,
-                    "Bekleme:",
-                    wait,
-                    "sn"
-                )
-
-                time.sleep(wait)
-
-    return receipts
-
-    receipts = {}
-
-    unique_blocks = sorted(
-        set(block_numbers)
+    candidate_tx_hashes = set(
+        candidate_tx_hashes
     )
 
     print(
         "Receipt blokları:",
-        len(unique_blocks)
+        len(block_numbers)
     )
 
-    for block_number in unique_blocks:
+    for block_number in block_numbers:
+
+        print(
+            "Block receipt:",
+            block_number
+        )
 
         try:
 
@@ -268,15 +171,25 @@ def get_receipts(tx_hashes):
                 block_number
             )
 
+            if not block_receipts:
+
+                continue
+
             for receipt in block_receipts:
 
                 tx_hash = receipt.get(
                     "transactionHash"
                 )
 
-                if tx_hash:
+                if (
+                    tx_hash
+                    and
+                    tx_hash in candidate_tx_hashes
+                ):
 
-                    receipts[tx_hash] = receipt
+                    receipts[
+                        tx_hash
+                    ] = receipt
 
         except Exception as error:
 
@@ -316,7 +229,6 @@ def get_transactions(
 
     transactions = {}
 
-    # 50'lik küçük batch'ler
     batch_size = 50
 
     for start in range(
@@ -328,6 +240,13 @@ def get_transactions(
         batch = calls[
             start:start + batch_size
         ]
+
+        print(
+            "Transaction batch:",
+            start + 1,
+            "->",
+            start + len(batch)
+        )
 
         for attempt in range(6):
 
@@ -341,7 +260,10 @@ def get_transactions(
 
                 if response.status_code == 429:
 
-                    wait = 2 ** attempt
+                    wait = min(
+                        2 ** attempt,
+                        10
+                    )
 
                     print(
                         "Transaction batch 429.",
@@ -360,12 +282,23 @@ def get_transactions(
 
                 break
 
-            except requests.RequestException:
+            except requests.RequestException as error:
 
                 if attempt == 5:
                     raise
 
-                wait = 2 ** attempt
+                wait = min(
+                    2 ** attempt,
+                    10
+                )
+
+                print(
+                    "Transaction RPC hatası:",
+                    error,
+                    "Bekleme:",
+                    wait,
+                    "sn"
+                )
 
                 time.sleep(wait)
 
@@ -550,7 +483,6 @@ def get_token_metadata_batch(
 
         ])
 
-    # eth_call standart RPC olduğu için batch kullanılabilir
     results = []
 
     batch_size = 30
@@ -579,15 +511,7 @@ def get_token_metadata_batch(
                 "id": i
             })
 
-        response = requests.post(
-            BASE_RPC_URL,
-            json=payload,
-            timeout=60
-        )
-
-        if response.status_code == 429:
-
-            time.sleep(3)
+        for attempt in range(5):
 
             response = requests.post(
                 BASE_RPC_URL,
@@ -595,9 +519,34 @@ def get_token_metadata_batch(
                 timeout=60
             )
 
-        response.raise_for_status()
+            if response.status_code == 429:
 
-        data = response.json()
+                wait = min(
+                    2 ** attempt,
+                    10
+                )
+
+                print(
+                    "Metadata 429. Bekleniyor:",
+                    wait,
+                    "sn"
+                )
+
+                time.sleep(wait)
+
+                continue
+
+            response.raise_for_status()
+
+            data = response.json()
+
+            break
+
+        else:
+
+            raise Exception(
+                "Token metadata alınamadı."
+            )
 
         result_map = {}
 
@@ -1019,6 +968,10 @@ def process_block_range(
         len(transactions)
     )
 
+    if not transactions:
+
+        return 0
+
     # --------------------------------------------------------
     # HANGİ BLOKLAR?
     # --------------------------------------------------------
@@ -1046,15 +999,9 @@ def process_block_range(
     # RECEIPTS
     # --------------------------------------------------------
 
-    receipts = get_receipts(
-        list(
-            transactions.keys()
-        )
-    )
-
-    print(
-        "Receipt alındı:",
-        len(receipts)
+    receipts = get_receipts_for_blocks(
+        unique_blocks,
+        transactions.keys()
     )
 
     print(
