@@ -83,31 +83,16 @@ def init_db():
 
 
 def save_trade(trade):
-
     db = connect()
-
     cur = db.cursor()
 
     try:
-
         cur.execute("""
             INSERT INTO trades (
-
-                tx_hash,
-                block_number,
-                timestamp,
-                trader,
-                token,
-                symbol,
-                side,
-                amount_usd
-
+                tx_hash, block_number, timestamp, trader, token, symbol, side, amount_usd
             )
-
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-
         """, (
-
             trade["tx_hash"],
             trade["block_number"],
             trade["timestamp"],
@@ -116,15 +101,16 @@ def save_trade(trade):
             trade["symbol"],
             trade["side"],
             trade["amount_usd"]
-
         ))
 
         db.commit()
+        return True
 
     except sqlite3.IntegrityError:
-        pass
+        return False
 
-    db.close()
+    finally:
+        db.close()
 
 
 def update_wallet(trade):
