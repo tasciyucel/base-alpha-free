@@ -163,6 +163,65 @@ def update_wallet(trade):
 
         trade["timestamp"],
         trade["timestamp"]
+        def get_last_scanned_block():
+
+    db = connect()
+    cur = db.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS scanner_state (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+
+    cur.execute("""
+        SELECT value
+        FROM scanner_state
+        WHERE key = 'last_scanned_block'
+    """)
+
+    row = cur.fetchone()
+
+    db.commit()
+    db.close()
+
+    if row is None:
+        return None
+
+    return int(row[0])
+
+
+def save_last_scanned_block(block_number):
+
+    db = connect()
+    cur = db.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS scanner_state (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+
+    cur.execute("""
+        INSERT INTO scanner_state (
+            key,
+            value
+        )
+        VALUES (
+            'last_scanned_block',
+            ?
+        )
+        ON CONFLICT(key)
+        DO UPDATE SET
+            value = excluded.value
+    """, (
+        str(block_number),
+    ))
+
+    db.commit()
+    db.close()
     ))
 
     db.commit()
