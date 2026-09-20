@@ -30,7 +30,7 @@ jobs:
 
       - name: Run scanner
         env:
-          BASE_RPC_URL: https://mainnet.base.org
+          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}
         run: |
           python scanner.py
           python wallet_stats.py
