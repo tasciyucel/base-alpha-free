@@ -6,45 +6,68 @@ on:
   schedule:
     - cron: "*/5 * * * *"
 
+
+concurrency:
+  group: base-alpha-scanner
+  cancel-in-progress: false
+
+
 jobs:
+
   scan:
+
     runs-on: ubuntu-latest
 
     permissions:
       contents: write
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
+
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
 
+
       - name: Run scanner
         env:
           BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}
+
         run: |
           python -u scanner.py
           python -u wallet_stats.py
 
+
       - name: Save database
         run: |
+
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add alpha.db
 
           if git diff --cached --quiet; then
+
             echo "Database değişmedi."
+
           else
-            git commit -m "Update scanner database"
+
+            git commit \
+              -m "Update scanner database"
+
             git push
+
           fi
