@@ -408,21 +408,46 @@ def main():
 
     init_db()
 
-    latest = get_latest_block()
+   latest = get_latest_block()
+
+print(
+    "Base latest block:",
+    latest
+)
+
+blocks_to_scan = 5
+
+all_transactions = []
+
+for block_number in range(
+    latest - blocks_to_scan + 1,
+    latest + 1
+):
 
     print(
-        "Base latest block:",
-        latest
+        "Blok taranıyor:",
+        block_number
     )
 
     block = get_block(
-        latest
+        block_number
     )
 
-    transactions = block.get(
+    block_transactions = block.get(
         "transactions",
         []
     )
+
+    all_transactions.extend(
+        block_transactions
+    )
+
+transactions = all_transactions
+
+print(
+    "Toplam transaction sayısı:",
+    len(transactions)
+)
 
     print(
         "Transaction sayısı:",
