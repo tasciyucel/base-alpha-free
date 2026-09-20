@@ -1,16 +1,16 @@
 import time
 import requests
 
-from config import BASE_RPC_URL
 from database import (
     init_db,
     save_trade,
     update_wallet,
-    get_token_metadata,
-    save_token_metadata,
     get_last_scanned_block,
     save_last_scanned_block,
+    get_token_metadata,
+    save_token_metadata,
 )
+from config import BASE_RPC_URL
 
 
 # ============================================================
@@ -20,40 +20,43 @@ from database import (
 USDC_ADDRESS = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 
 TRANSFER_TOPIC = (
-    "0xddf252ad1be2c89b69c2b068fc378daa952ba7f"
-    "163c4a11628f55a4df523b3ef"
+    "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 )
 
-# Bir chunk kaç blok?
+ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+
+# Her chunk'ta kaç blok taranacak
 CHUNK_SIZE = 10
 
-# JSON-RPC batch boyutu
-# 429 yaşamamak için 25 kullanıyoruz.
-RPC_BATCH_SIZE = 25
+# İlk çalışmada geriye doğru kaç blok taransın?
+INITIAL_LOOKBACK = 2600
 
-# RPC tekrar deneme sayısı
-MAX_RETRIES = 7
+# Receipt batch büyüklüğü.
+# Alchemy 429 verdiği için küçük tutuluyor.
+RECEIPT_BATCH_SIZE = 5
 
-# Batch'ler arasında küçük bekleme
-BATCH_DELAY = 0.25
+# Batch'ler arasında bekleme
+BATCH_DELAY = 0.75
 
-# Token cache
-TOKEN_CACHE = {}
+# RPC retry
+MAX_RETRIES = 8
 
-# HTTP connection reuse
-SESSION = requests.Session()
+# Her retry arasında başlangıç beklemesi
+RETRY_DELAY = 1.5
+
+# Minimum USDC işlem miktarı.
+# Çok küçük transferleri elemek için.
+MIN_USDC = 1.0
 
 
 # ============================================================
-# GENEL RPC
+# RPC
 # ============================================================
 
-def rpc(method, params):
-    """
-    Tek JSON-RPC isteği.
-    429 durumunda exponential backoff uygular.
-    """
+session = requests.Session()
 
+
+def rpc_call(method, params):
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -62,33 +65,22 @@ def rpc(method, params):
     }
 
     for attempt in range(MAX_RETRIES):
-
         try:
-
-            response = SESSION.post(
+            response = session.post(
                 BASE_RPC_URL,
                 json=payload,
-                timeout=45,
+                timeout=30,
             )
 
-            # ------------------------------------------------
-            # Rate limit
-            # ------------------------------------------------
-
             if response.status_code == 429:
-
-                wait = min(
-                    2 ** attempt,
-                    30,
-                )
+                wait = RETRY_DELAY * (attempt + 1)
 
                 print(
-                    f"RPC 429 - "
-                    f"{wait} saniye bekleniyor..."
+                    f"RPC HTTP 429: {method} "
+                    f"- {wait:.1f}s bekleniyor..."
                 )
 
                 time.sleep(wait)
-
                 continue
 
             response.raise_for_status()
@@ -96,228 +88,196 @@ def rpc(method, params):
             data = response.json()
 
             if "error" in data:
-
                 error = data["error"]
 
-                raise RuntimeError(
-                    f"RPC error: {error}"
+                print(
+                    f"RPC error: {method}: {error}"
                 )
+
+                if error.get("code") == 429:
+                    wait = RETRY_DELAY * (attempt + 1)
+
+                    print(
+                        f"RPC JSON 429: "
+                        f"{wait:.1f}s bekleniyor..."
+                    )
+
+                    time.sleep(wait)
+                    continue
+
+                return None
 
             return data.get("result")
 
-        except Exception as e:
-
-            if attempt >= MAX_RETRIES - 1:
-                raise
-
-            wait = min(
-                2 ** attempt,
-                30,
-            )
+        except Exception as exc:
+            wait = RETRY_DELAY * (attempt + 1)
 
             print(
-                f"RPC hata: {e}"
+                f"RPC exception: {method}: {exc}"
             )
 
-            print(
-                f"{wait} saniye sonra tekrar..."
-            )
-
-            time.sleep(wait)
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(wait)
 
     return None
 
 
-# ============================================================
-# BATCH RPC
-# ============================================================
-
 def rpc_batch(calls):
     """
-    Gerçek JSON-RPC batch isteği.
-
-    Önemli:
-    - 429 olursa aynı batch tekrar gönderilir.
-    - Eksik cevap gelirse batch başarısız kabul edilir.
-    - Böylece sessiz veri kaybı olmaz.
+    Batch RPC.
+    Başarılı sonuçları korur.
+    Tek tek 429 alan çağrıları tekrar dener.
     """
 
-    payload = []
+    if not calls:
+        return []
 
-    for rpc_id, (method, params) in enumerate(
-        calls,
-        start=1,
-    ):
-
-        payload.append({
-            "jsonrpc": "2.0",
-            "id": rpc_id,
-            "method": method,
-            "params": params,
-        })
-
-    expected_ids = {
-        item["id"]
-        for item in payload
-    }
+    pending = list(calls)
+    results = {}
 
     for attempt in range(MAX_RETRIES):
 
-        try:
+        if not pending:
+            break
 
-            response = SESSION.post(
+        payload = []
+
+        for item in pending:
+            payload.append({
+                "jsonrpc": "2.0",
+                "id": item["id"],
+                "method": item["method"],
+                "params": item["params"],
+            })
+
+        try:
+            response = session.post(
                 BASE_RPC_URL,
                 json=payload,
                 timeout=60,
             )
 
-            # ------------------------------------------------
-            # 429
-            # ------------------------------------------------
-
             if response.status_code == 429:
-
-                wait = min(
-                    2 ** attempt,
-                    30,
-                )
+                wait = RETRY_DELAY * (attempt + 1)
 
                 print(
-                    f"Batch RPC 429 - "
-                    f"{wait} saniye bekleniyor..."
+                    f"Batch HTTP 429 "
+                    f"({len(pending)} item) "
+                    f"- {wait:.1f}s bekleniyor..."
                 )
 
                 time.sleep(wait)
-
                 continue
 
             response.raise_for_status()
 
             data = response.json()
 
-            if not isinstance(data, list):
-
-                raise RuntimeError(
-                    "Batch RPC cevabı liste değil."
-                )
-
-            # ------------------------------------------------
-            # Gelen ID'leri kontrol et
-            # ------------------------------------------------
-
-            received_ids = {
-                item.get("id")
-                for item in data
-            }
-
-            missing_ids = (
-                expected_ids
-                - received_ids
-            )
-
-            if missing_ids:
-
-                raise RuntimeError(
-                    "Batch RPC eksik cevap verdi. "
-                    f"Eksik ID sayısı: "
-                    f"{len(missing_ids)}"
-                )
-
-            results = {}
+            # RPC batch cevaplarını id -> response şeklinde tut
+            response_map = {}
 
             for item in data:
+                response_map[item.get("id")] = item
 
-                rpc_id = item.get(
-                    "id"
+            next_pending = []
+
+            for item in pending:
+
+                item_id = item["id"]
+                result = response_map.get(item_id)
+
+                if result is None:
+                    next_pending.append(item)
+                    continue
+
+                if "error" in result:
+                    error = result["error"]
+
+                    if error.get("code") == 429:
+
+                        next_pending.append(item)
+
+                    else:
+                        print(
+                            f"Batch RPC error "
+                            f"id={item_id}: {error}"
+                        )
+
+                        # Kalıcı RPC hatasında None
+                        results[item_id] = None
+
+                    continue
+
+                results[item_id] = result.get("result")
+
+            pending = next_pending
+
+            if pending:
+                wait = RETRY_DELAY * (attempt + 1)
+
+                print(
+                    f"Batch içinde {len(pending)} "
+                    f"RPC çağrısı tekrar denenecek "
+                    f"- {wait:.1f}s"
                 )
 
-                # ------------------------------------------------
-                # RPC error
-                # ------------------------------------------------
+                time.sleep(wait)
 
-                if "error" in item:
+        except Exception as exc:
 
-                    print(
-                        f"Batch item RPC error "
-                        f"id={rpc_id}: "
-                        f"{item['error']}"
-                    )
-
-                    results[rpc_id] = None
-
-                else:
-
-                    results[rpc_id] = (
-                        item.get("result")
-                    )
-
-            return results
-
-        except Exception as e:
-
-            if attempt >= MAX_RETRIES - 1:
-                raise
-
-            wait = min(
-                2 ** attempt,
-                30,
-            )
+            wait = RETRY_DELAY * (attempt + 1)
 
             print(
-                f"Batch RPC hata: {e}"
-            )
-
-            print(
-                f"{wait} saniye sonra "
-                f"aynı batch tekrar denenecek..."
+                f"Batch exception: {exc} "
+                f"- {wait:.1f}s"
             )
 
             time.sleep(wait)
 
-    raise RuntimeError(
-        "Batch RPC başarısız."
-    )
+    # Hâlâ alınamayanları None yap
+    for item in pending:
+        results[item["id"]] = None
+
+    return [
+        results.get(item["id"])
+        for item in calls
+    ]
 
 
 # ============================================================
-# HEX GÜVENLİ DÖNÜŞÜM
+# HEX HELPERS
 # ============================================================
 
-def safe_hex_to_int(value, default=0):
-    """
-    '0x' veya None gibi değerlerde hata vermez.
-    """
-
+def hex_to_int(value):
     if value is None:
-        return default
+        return 0
 
     if isinstance(value, int):
         return value
 
-    if not isinstance(value, str):
-        return default
+    return int(value, 16)
 
-    value = value.strip()
 
-    if value == "":
-        return default
+def topic_address(topic):
+    if not topic:
+        return None
 
-    if value.lower() == "0x":
-        return default
+    topic = topic.lower()
 
-    try:
+    if topic.startswith("0x"):
+        topic = topic[2:]
 
-        return int(
-            value,
-            16,
-        )
+    if len(topic) < 40:
+        return None
 
-    except (
-        ValueError,
-        TypeError,
-    ):
+    return "0x" + topic[-40:]
 
-        return default
+
+def normalize_address(address):
+    if not address:
+        return ""
+
+    return address.lower()
 
 
 # ============================================================
@@ -326,21 +286,22 @@ def safe_hex_to_int(value, default=0):
 
 def get_latest_block():
 
-    result = rpc(
+    result = rpc_call(
         "eth_blockNumber",
         [],
     )
 
-    return safe_hex_to_int(
-        result
-    )
+    if result is None:
+        raise RuntimeError(
+            "Latest block alınamadı."
+        )
+
+    return hex_to_int(result)
 
 
-def get_block_timestamp(
-    block_number,
-):
+def get_block_timestamp(block_number):
 
-    result = rpc(
+    result = rpc_call(
         "eth_getBlockByNumber",
         [
             hex(block_number),
@@ -349,20 +310,15 @@ def get_block_timestamp(
     )
 
     if not result:
-        return int(
-            time.time()
-        )
+        return None
 
-    return safe_hex_to_int(
-        result.get(
-            "timestamp"
-        ),
-        int(time.time()),
+    return hex_to_int(
+        result.get("timestamp")
     )
 
 
 # ============================================================
-# USDC LOG
+# USDC LOGS
 # ============================================================
 
 def get_usdc_logs(
@@ -370,270 +326,167 @@ def get_usdc_logs(
     to_block,
 ):
 
-    params = {
-        "fromBlock": hex(
-            from_block
-        ),
-        "toBlock": hex(
-            to_block
-        ),
-        "address": USDC_ADDRESS,
-        "topics": [
-            TRANSFER_TOPIC
-        ],
-    }
+    print(
+        "USDC logları aranıyor..."
+    )
 
-    result = rpc(
+    result = rpc_call(
         "eth_getLogs",
-        [params],
+        [{
+            "address": USDC_ADDRESS,
+            "fromBlock": hex(from_block),
+            "toBlock": hex(to_block),
+            "topics": [
+                TRANSFER_TOPIC
+            ],
+        }],
     )
 
-    return result or []
+    if result is None:
+        return None
 
-
-# ============================================================
-# ADDRESS
-# ============================================================
-
-def topic_to_address(topic):
-
-    if not topic:
-        return ""
-
-    if not isinstance(
-        topic,
-        str,
-    ):
-        return ""
-
-    if len(topic) < 40:
-        return ""
-
-    return (
-        "0x"
-        + topic[-40:].lower()
+    print(
+        f"Toplam USDC log: {len(result)}"
     )
 
+    return result
+
 
 # ============================================================
-# TRANSFER LOG PARSE
+# LOG PARSING
 # ============================================================
 
 def parse_transfer_log(log):
 
-    topics = log.get(
-        "topics",
-        [],
-    )
+    topics = log.get("topics", [])
 
     if len(topics) < 3:
         return None
 
-    from_address = topic_to_address(
-        topics[1]
-    )
+    if topics[0].lower() != TRANSFER_TOPIC:
+        return None
 
-    to_address = topic_to_address(
-        topics[2]
-    )
+    sender = topic_address(topics[1])
+    receiver = topic_address(topics[2])
 
-    raw_amount = safe_hex_to_int(
-        log.get(
-            "data",
-            "0x0",
-        )
-    )
+    data = log.get("data", "0x0")
 
-    block_number = safe_hex_to_int(
-        log.get(
-            "blockNumber",
-            "0x0",
-        )
-    )
+    try:
+        amount_raw = hex_to_int(data)
+    except Exception:
+        return None
 
-    timestamp = log.get(
-        "blockTimestamp"
-    )
-
-    if isinstance(
-        timestamp,
-        str,
-    ):
-
-        timestamp = safe_hex_to_int(
-            timestamp,
-            0,
-        )
-
-    elif not isinstance(
-        timestamp,
-        int,
-    ):
-
-        timestamp = 0
+    amount = amount_raw / 1_000_000
 
     return {
-        "from": from_address,
-        "to": to_address,
-        "amount": raw_amount,
-        "block_number": block_number,
-        "timestamp": timestamp,
-        "tx_hash": log.get(
-            "transactionHash"
+        "token": normalize_address(
+            log.get("address")
+        ),
+        "from": normalize_address(sender),
+        "to": normalize_address(receiver),
+        "amount_raw": amount_raw,
+        "amount": amount,
+        "tx_hash": log.get("transactionHash"),
+        "block_number": hex_to_int(
+            log.get("blockNumber")
+        ),
+        "log_index": hex_to_int(
+            log.get("logIndex")
         ),
     }
 
 
+def parse_all_transfer_logs(receipt):
+
+    transfers = []
+
+    for log in receipt.get("logs", []):
+
+        topics = log.get("topics", [])
+
+        if not topics:
+            continue
+
+        if topics[0].lower() != TRANSFER_TOPIC:
+            continue
+
+        parsed = parse_transfer_log(log)
+
+        if parsed:
+            transfers.append(parsed)
+
+    return transfers
+
+
 # ============================================================
-# TRANSACTION BATCH
+# RECEIPTS
 # ============================================================
 
-def get_transactions(
-    tx_hashes,
-):
+def get_receipts(tx_hashes):
 
-    transactions = {}
+    if not tx_hashes:
+        return []
 
-    total = len(
-        tx_hashes
-    )
+    receipts = []
 
-    if total == 0:
-        return transactions
+    total = len(tx_hashes)
 
     for start in range(
         0,
         total,
-        RPC_BATCH_SIZE,
+        RECEIPT_BATCH_SIZE,
     ):
 
         batch_hashes = tx_hashes[
-            start:
-            start + RPC_BATCH_SIZE
+            start:start + RECEIPT_BATCH_SIZE
         ]
-
-        end = start + len(
-            batch_hashes
-        )
-
-        print(
-            f"Transaction batch: "
-            f"{start + 1} -> {end} / {total}"
-        )
 
         calls = []
 
-        for tx_hash in batch_hashes:
-
-            calls.append(
-                (
-                    "eth_getTransactionByHash",
-                    [tx_hash],
-                )
-            )
-
-        results = rpc_batch(
-            calls
-        )
-
         for index, tx_hash in enumerate(
-            batch_hashes,
-            start=1,
+            batch_hashes
         ):
 
-            tx = results.get(
-                index
-            )
-
-            if tx is not None:
-
-                transactions[
-                    tx_hash
-                ] = tx
-
-        time.sleep(
-            BATCH_DELAY
-        )
-
-    return transactions
-
-
-# ============================================================
-# RECEIPT BATCH
-# ============================================================
-
-def get_transaction_receipts(
-    tx_hashes,
-):
-
-    receipts = {}
-
-    total = len(
-        tx_hashes
-    )
-
-    if total == 0:
-        return receipts
-
-    for start in range(
-        0,
-        total,
-        RPC_BATCH_SIZE,
-    ):
-
-        batch_hashes = tx_hashes[
-            start:
-            start + RPC_BATCH_SIZE
-        ]
-
-        end = start + len(
-            batch_hashes
-        )
+            calls.append({
+                "id": start + index + 1,
+                "method": "eth_getTransactionReceipt",
+                "params": [tx_hash],
+            })
 
         print(
             f"Receipt batch: "
-            f"{start + 1} -> {end} / {total}"
+            f"{start + 1} -> "
+            f"{min(start + RECEIPT_BATCH_SIZE, total)} "
+            f"/ {total}"
         )
 
-        calls = []
-
-        for tx_hash in batch_hashes:
-
-            calls.append(
-                (
-                    "eth_getTransactionReceipt",
-                    [tx_hash],
-                )
-            )
-
-        results = rpc_batch(
+        batch_results = rpc_batch(
             calls
         )
 
-        for index, tx_hash in enumerate(
+        for tx_hash, receipt in zip(
             batch_hashes,
-            start=1,
+            batch_results,
         ):
 
-            receipt = results.get(
-                index
-            )
-
             if receipt is not None:
+                receipts.append(
+                    receipt
+                )
 
-                receipts[
-                    tx_hash
-                ] = receipt
+        if start + RECEIPT_BATCH_SIZE < total:
+            time.sleep(BATCH_DELAY)
 
-        time.sleep(
-            BATCH_DELAY
-        )
+    print(
+        f"Receipt alındı: "
+        f"{len(receipts)} / {total}"
+    )
 
     return receipts
 
 
 # ============================================================
-# TOKEN DECIMALS
+# TOKEN METADATA
 # ============================================================
 
 def eth_call(
@@ -641,7 +494,7 @@ def eth_call(
     data,
 ):
 
-    return rpc(
+    return rpc_call(
         "eth_call",
         [
             {
@@ -653,401 +506,357 @@ def eth_call(
     )
 
 
-def get_token_decimals(
-    address,
-):
+def decode_string_result(result):
 
-    address = address.lower()
-
-    # --------------------------------------------------------
-    # RAM CACHE
-    # --------------------------------------------------------
-
-    if address in TOKEN_CACHE:
-
-        return TOKEN_CACHE[
-            address
-        ]
-
-    # --------------------------------------------------------
-    # DATABASE CACHE
-    # --------------------------------------------------------
-
-    metadata = get_token_metadata(
-        address
-    )
-
-    if metadata is not None:
-
-        decimals = metadata.get(
-            "decimals"
-        )
-
-        if decimals is not None:
-
-            TOKEN_CACHE[
-                address
-            ] = decimals
-
-            return decimals
-
-    # --------------------------------------------------------
-    # RPC
-    # --------------------------------------------------------
+    if not result:
+        return ""
 
     try:
 
-        result = eth_call(
-            address,
-            "0x313ce567",
+        raw = bytes.fromhex(
+            result[2:]
         )
 
-        if not result:
-            return None
+        if len(raw) < 64:
+            return ""
 
-        decimals = safe_hex_to_int(
-            result,
-            None,
+        # ABI dynamic string
+        offset = int.from_bytes(
+            raw[0:32],
+            "big",
         )
 
-        if decimals is None:
-            return None
+        if offset + 32 > len(raw):
+            return ""
 
-        save_token_metadata(
-            address,
-            "",
-            "",
-            decimals,
+        length = int.from_bytes(
+            raw[offset:offset + 32],
+            "big",
         )
 
-        TOKEN_CACHE[
-            address
-        ] = decimals
+        start = offset + 32
+        end = start + length
 
-        return decimals
-
-    except Exception as e:
-
-        print(
-            f"Decimals alınamadı "
-            f"{address}: {e}"
+        return raw[start:end].decode(
+            "utf-8",
+            errors="ignore",
         )
 
-        return None
+    except Exception:
+        return ""
 
 
-# ============================================================
-# TRANSACTION ANALYSIS
-# ============================================================
+def decode_bytes32_string(result):
 
-def analyze_transaction(
-    tx,
-    receipt,
-    usdc_log_info,
+    if not result:
+        return ""
+
+    try:
+
+        raw = bytes.fromhex(
+            result[2:]
+        )
+
+        raw = raw[:32]
+
+        return raw.rstrip(
+            b"\x00"
+        ).decode(
+            "utf-8",
+            errors="ignore",
+        )
+
+    except Exception:
+        return ""
+
+
+def get_token_metadata_cached(
+    token_address
 ):
 
-    if not tx:
-        return None
-
-    if not receipt:
-        return None
-
-    tx_hash = tx.get(
-        "hash"
-    )
-
-    trader = (
-        tx.get("from")
-        or ""
-    ).lower()
-
-    if not trader:
-        return None
-
-    receipt_logs = receipt.get(
-        "logs",
-        [],
-    )
-
-    if not receipt_logs:
-        return None
-
-    usdc_in = 0
-    usdc_out = 0
-
-    token_movements = {}
-
-    timestamp = (
-        usdc_log_info.get(
-            "timestamp",
-            0,
-        )
-        or 0
-    )
-
-    block_number = (
-        usdc_log_info.get(
-            "block_number",
-            0,
-        )
-        or 0
-    )
-
-    # --------------------------------------------------------
-    # Receipt loglarını tara
-    # --------------------------------------------------------
-
-    for log in receipt_logs:
-
-        topics = log.get(
-            "topics",
-            [],
-        )
-
-        if len(topics) < 3:
-            continue
-
-        topic0 = topics[0]
-
-        if not isinstance(
-            topic0,
-            str,
-        ):
-            continue
-
-        if topic0.lower() != TRANSFER_TOPIC:
-            continue
-
-        token_address = (
-            log.get(
-                "address"
-            )
-            or ""
-        ).lower()
-
-        parsed = parse_transfer_log(
-            log
-        )
-
-        if parsed is None:
-            continue
-
-        from_address = parsed[
-            "from"
-        ]
-
-        to_address = parsed[
-            "to"
-        ]
-
-        amount = parsed[
-            "amount"
-        ]
-
-        if parsed[
-            "timestamp"
-        ]:
-
-            timestamp = parsed[
-                "timestamp"
-            ]
-
-        if parsed[
-            "block_number"
-        ]:
-
-            block_number = parsed[
-                "block_number"
-            ]
-
-        # ----------------------------------------------------
-        # USDC
-        # ----------------------------------------------------
-
-        if token_address == USDC_ADDRESS:
-
-            if from_address == trader:
-
-                usdc_out += amount
-
-            if to_address == trader:
-
-                usdc_in += amount
-
-            continue
-
-        # ----------------------------------------------------
-        # Diğer token
-        # ----------------------------------------------------
-
-        if from_address == trader:
-
-            if token_address not in token_movements:
-
-                token_movements[
-                    token_address
-                ] = {
-                    "sent": 0,
-                    "received": 0,
-                }
-
-            token_movements[
-                token_address
-            ][
-                "sent"
-            ] += amount
-
-        if to_address == trader:
-
-            if token_address not in token_movements:
-
-                token_movements[
-                    token_address
-                ] = {
-                    "sent": 0,
-                    "received": 0,
-                }
-
-            token_movements[
-                token_address
-            ][
-                "received"
-            ] += amount
-
-    # --------------------------------------------------------
-    # USDC hareketi yok
-    # --------------------------------------------------------
-
-    if (
-        usdc_in == 0
-        and usdc_out == 0
-    ):
-
-        return None
-
-    # --------------------------------------------------------
-    # Token hareketi yok
-    # --------------------------------------------------------
-
-    if not token_movements:
-        return None
-
-    side = None
-
-    amount_usd_raw = 0
-
-    token_address = None
-
-    token_amount_raw = 0
-
-    # --------------------------------------------------------
-    # BUY
-    # --------------------------------------------------------
-
-    if usdc_out > 0:
-
-        for (
-            address,
-            movement,
-        ) in token_movements.items():
-
-            if movement[
-                "received"
-            ] > 0:
-
-                side = "BUY"
-
-                token_address = address
-
-                token_amount_raw = (
-                    movement[
-                        "received"
-                    ]
-                )
-
-                amount_usd_raw = (
-                    usdc_out
-                )
-
-                break
-
-    # --------------------------------------------------------
-    # SELL
-    # --------------------------------------------------------
-
-    if (
-        side is None
-        and usdc_in > 0
-    ):
-
-        for (
-            address,
-            movement,
-        ) in token_movements.items():
-
-            if movement[
-                "sent"
-            ] > 0:
-
-                side = "SELL"
-
-                token_address = address
-
-                token_amount_raw = (
-                    movement[
-                        "sent"
-                    ]
-                )
-
-                amount_usd_raw = (
-                    usdc_in
-                )
-
-                break
-
-    if side is None:
-        return None
-
-    # --------------------------------------------------------
-    # USDC 6 decimals
-    # --------------------------------------------------------
-
-    amount_usd = (
-        amount_usd_raw
-        / 1_000_000
-    )
-
-    # --------------------------------------------------------
-    # Token decimals
-    # --------------------------------------------------------
-
-    decimals = get_token_decimals(
+    token_address = normalize_address(
         token_address
     )
 
-    if decimals is None:
-
-        print(
-            f"Token decimals bulunamadı: "
-            f"{token_address}"
-        )
-
+    if not token_address:
         return None
 
-    token_amount = (
-        token_amount_raw
-        / (
-            10 ** decimals
+    cached = get_token_metadata(
+        token_address
+    )
+
+    if cached:
+        return cached
+
+    # symbol()
+    symbol_result = eth_call(
+        token_address,
+        "0x95d89b41",
+    )
+
+    # name()
+    name_result = eth_call(
+        token_address,
+        "0x06fdde03",
+    )
+
+    # decimals()
+    decimals_result = eth_call(
+        token_address,
+        "0x313ce567",
+    )
+
+    symbol = (
+        decode_string_result(
+            symbol_result
+        )
+        or decode_bytes32_string(
+            symbol_result
         )
     )
 
+    name = (
+        decode_string_result(
+            name_result
+        )
+        or decode_bytes32_string(
+            name_result
+        )
+    )
+
+    decimals = 18
+
+    if decimals_result:
+
+        try:
+            decimals = hex_to_int(
+                decimals_result
+            )
+        except Exception:
+            decimals = 18
+
+    save_token_metadata(
+        token_address,
+        symbol,
+        name,
+        decimals,
+    )
+
+    return {
+        "symbol": symbol,
+        "name": name,
+        "decimals": decimals,
+    }
+
+
+# ============================================================
+# SWAP ANALYSIS
+# ============================================================
+
+def analyze_transaction(
+    receipt,
+    usdc_log,
+    timestamp,
+):
+
+    tx_hash = receipt.get(
+        "transactionHash"
+    )
+
+    if not tx_hash:
+        return None
+
+    transfers = parse_all_transfer_logs(
+        receipt
+    )
+
+    if not transfers:
+        return None
+
+    usdc_transfers = []
+
+    for transfer in transfers:
+
+        if (
+            transfer["token"]
+            == USDC_ADDRESS.lower()
+        ):
+            usdc_transfers.append(
+                transfer
+            )
+
+    if not usdc_transfers:
+        return None
+
+    # --------------------------------------------------------
+    # Aynı transaction'daki USDC hareketlerini değerlendir.
+    # Bir transaction'da birden fazla USDC transferi olabilir.
+    # --------------------------------------------------------
+
+    target_usdc = None
+
+    usdc_from = normalize_address(
+        usdc_log["from"]
+    )
+
+    usdc_to = normalize_address(
+        usdc_log["to"]
+    )
+
+    for transfer in usdc_transfers:
+
+        if (
+            normalize_address(
+                transfer["from"]
+            ) == usdc_from
+            and
+            normalize_address(
+                transfer["to"]
+            ) == usdc_to
+        ):
+
+            target_usdc = transfer
+            break
+
+    if target_usdc is None:
+        target_usdc = usdc_transfers[0]
+
+    amount_usd = target_usdc["amount"]
+
+    if amount_usd < MIN_USDC:
+        return None
+
+    # --------------------------------------------------------
+    # USDC hareketinin karşılığındaki token transferini bul.
+    #
+    # BUY:
+    #   trader -> USDC
+    #   pool/router -> trader : token
+    #
+    # SELL:
+    #   trader -> token
+    #   pool/router -> trader : USDC
+    #
+    # Böylece transaction'ın "from" bilgisini almak için
+    # eth_getTransactionByHash kullanmak zorunda kalmıyoruz.
+    # --------------------------------------------------------
+
+    candidate_token_transfers = []
+
+    for transfer in transfers:
+
+        token = normalize_address(
+            transfer["token"]
+        )
+
+        if token == USDC_ADDRESS.lower():
+            continue
+
+        if token == ZERO_ADDRESS:
+            continue
+
+        candidate_token_transfers.append(
+            transfer
+        )
+
+    if not candidate_token_transfers:
+        return None
+
+    trader = None
+    side = None
+    token_transfer = None
+
+    # --------------------------------------------------------
+    # BUY
+    #
+    # USDC gönderen adres aynı zamanda
+    # token alan adres ise:
+    #
+    # trader = USDC from
+    # --------------------------------------------------------
+
+    for transfer in candidate_token_transfers:
+
+        if (
+            normalize_address(
+                transfer["to"]
+            ) == usdc_from
+        ):
+
+            trader = usdc_from
+            side = "BUY"
+            token_transfer = transfer
+            break
+
+    # --------------------------------------------------------
+    # SELL
+    #
+    # USDC alan adres token gönderen adres ise:
+    #
+    # trader = USDC to
+    # --------------------------------------------------------
+
+    if trader is None:
+
+        for transfer in candidate_token_transfers:
+
+            if (
+                normalize_address(
+                    transfer["from"]
+                ) == usdc_to
+            ):
+
+                trader = usdc_to
+                side = "SELL"
+                token_transfer = transfer
+                break
+
+    if trader is None:
+        return None
+
+    token_address = normalize_address(
+        token_transfer["token"]
+    )
+
+    # --------------------------------------------------------
+    # Token metadata
+    # --------------------------------------------------------
+
+    metadata = get_token_metadata_cached(
+        token_address
+    )
+
+    if metadata is None:
+        return None
+
+    decimals = metadata.get(
+        "decimals",
+        18,
+    )
+
+    token_amount = (
+        token_transfer["amount_raw"]
+        / (10 ** decimals)
+    )
+
+    symbol = metadata.get(
+        "symbol",
+        "",
+    )
+
+    # Bazı kontratlarda sembol boş olabilir.
+    if not symbol:
+        symbol = token_address[:10]
+
     return {
         "tx_hash": tx_hash,
-        "block_number": block_number,
+        "block_number": hex_to_int(
+            receipt.get("blockNumber")
+        ),
         "timestamp": timestamp,
         "trader": trader,
         "token": token_address,
-        "symbol": "",
+        "symbol": symbol,
         "side": side,
         "amount_usd": amount_usd,
         "token_amount": token_amount,
@@ -1055,7 +864,7 @@ def analyze_transaction(
 
 
 # ============================================================
-# CHUNK
+# CHUNK PROCESSING
 # ============================================================
 
 def process_chunk(
@@ -1065,16 +874,16 @@ def process_chunk(
 
     print()
     print(
+        "=" * 100
+    )
+
+    print(
         f"Chunk: "
         f"{from_block} -> {to_block}"
     )
 
-    # --------------------------------------------------------
-    # 1. USDC logs
-    # --------------------------------------------------------
-
     print(
-        "USDC logları aranıyor..."
+        "USDC Transfer logları taranıyor..."
     )
 
     logs = get_usdc_logs(
@@ -1082,24 +891,27 @@ def process_chunk(
         to_block,
     )
 
-    print(
-        f"Toplam USDC log: "
-        f"{len(logs)}"
-    )
+    if logs is None:
+
+        print(
+            "USDC logları alınamadı."
+        )
+
+        return False
 
     if not logs:
 
         print(
-            "Bu chunk'ta USDC hareketi yok."
+            "Bu chunk'ta USDC transferi yok."
         )
 
+        # Timestamp/state için latest block
+        # daha sonra güvenle ilerlenebilir.
         return True
 
-    # --------------------------------------------------------
-    # 2. Parse
-    # --------------------------------------------------------
-
     parsed_logs = []
+
+    tx_map = {}
 
     for log in logs:
 
@@ -1114,34 +926,21 @@ def process_chunk(
             parsed
         )
 
+        tx_hash = parsed["tx_hash"]
+
+        if tx_hash:
+            tx_map.setdefault(
+                tx_hash,
+                []
+            ).append(parsed)
+
     print(
         f"USDC Transfer log: "
         f"{len(parsed_logs)}"
     )
 
-    # --------------------------------------------------------
-    # 3. Unique tx
-    # --------------------------------------------------------
-
-    tx_info = {}
-
-    for item in parsed_logs:
-
-        tx_hash = item.get(
-            "tx_hash"
-        )
-
-        if not tx_hash:
-            continue
-
-        if tx_hash not in tx_info:
-
-            tx_info[
-                tx_hash
-            ] = item
-
     tx_hashes = list(
-        tx_info.keys()
+        tx_map.keys()
     )
 
     print(
@@ -1153,138 +952,148 @@ def process_chunk(
         return True
 
     # --------------------------------------------------------
-    # 4. Transactions
+    # TransactionByHash YOK.
+    # Sadece receipt alıyoruz.
     # --------------------------------------------------------
 
-    transactions = get_transactions(
+    receipts = get_receipts(
         tx_hashes
     )
 
-    print(
-        f"Transaction alındı: "
-        f"{len(transactions)} / "
-        f"{len(tx_hashes)}"
-    )
+    if len(receipts) != len(tx_hashes):
 
-    # Transaction eksikliği varsa
-    # chunk'ı tamamlanmış saymıyoruz.
-    if len(transactions) != len(
-        tx_hashes
-    ):
+        print()
+        print(
+            f"UYARI: "
+            f"{len(tx_hashes) - len(receipts)} "
+            f"receipt alınamadı."
+        )
 
         print(
-            "Bazı transaction'lar "
-            "alınamadı."
+            "Chunk başarısız kabul ediliyor."
+        )
+
+        print(
+            "last_scanned_block ilerletilmeyecek."
         )
 
         return False
 
-    # --------------------------------------------------------
-    # 5. Receipts
-    # --------------------------------------------------------
+    # Receipt'leri hash ile eşleştir
+    receipt_map = {}
 
-    receipts = get_transaction_receipts(
-        tx_hashes
-    )
+    for receipt in receipts:
 
-    print(
-        f"Receipt alındı: "
-        f"{len(receipts)} / "
-        f"{len(tx_hashes)}"
-    )
-
-    # Receipt eksikliği varsa
-    # chunk'ı tamamlamıyoruz.
-    if len(receipts) != len(
-        tx_hashes
-    ):
-
-        print(
-            "Bazı receipt'ler "
-            "alınamadı."
+        tx_hash = receipt.get(
+            "transactionHash"
         )
 
-        return False
+        if tx_hash:
+            receipt_map[
+                tx_hash.lower()
+            ] = receipt
 
-    # --------------------------------------------------------
-    # 6. Swap analysis
-    # --------------------------------------------------------
+    # Block timestamp cache
+    timestamp_cache = {}
 
-    real_swaps = []
+    found_trades = 0
+    saved_trades = 0
 
-    for tx_hash in tx_hashes:
+    for tx_hash, tx_logs in tx_map.items():
 
-        tx = transactions.get(
-            tx_hash
+        receipt = receipt_map.get(
+            tx_hash.lower()
         )
-
-        receipt = receipts.get(
-            tx_hash
-        )
-
-        if tx is None:
-            continue
 
         if receipt is None:
             continue
 
-        result = analyze_transaction(
-            tx,
-            receipt,
-            tx_info[
-                tx_hash
-            ],
+        block_number = hex_to_int(
+            receipt.get("blockNumber")
         )
 
-        if result is not None:
+        if block_number not in timestamp_cache:
 
-            real_swaps.append(
-                result
+            timestamp_cache[
+                block_number
+            ] = get_block_timestamp(
+                block_number
             )
 
+        timestamp = timestamp_cache[
+            block_number
+        ]
+
+        if timestamp is None:
+            timestamp = int(
+                time.time()
+            )
+
+        # Aynı transaction'daki her USDC logunu
+        # ayrı ayrı deniyoruz.
+        for usdc_log in tx_logs:
+
+            trade = analyze_transaction(
+                receipt,
+                usdc_log,
+                timestamp,
+            )
+
+            if trade is None:
+                continue
+
+            found_trades += 1
+
+            saved = save_trade(
+                trade
+            )
+
+            if saved:
+                update_wallet(
+                    trade
+                )
+
+                saved_trades += 1
+
+                print()
+                print(
+                    "SWAP BULUNDU"
+                )
+                print(
+                    "TX:",
+                    trade["tx_hash"]
+                )
+                print(
+                    "Wallet:",
+                    trade["trader"]
+                )
+                print(
+                    "Token:",
+                    trade["symbol"],
+                    trade["token"]
+                )
+                print(
+                    "Side:",
+                    trade["side"]
+                )
+                print(
+                    "USDC:",
+                    trade["amount_usd"]
+                )
+                print(
+                    "Token miktarı:",
+                    trade["token_amount"]
+                )
+
+    print()
     print(
-        f"Gerçek swap adayı: "
-        f"{len(real_swaps)}"
+        f"Analiz edilen swap: "
+        f"{found_trades}"
     )
-
-    # --------------------------------------------------------
-    # 7. DB
-    # --------------------------------------------------------
-
-    saved_count = 0
-
-    for trade in real_swaps:
-
-        saved = save_trade(
-            trade
-        )
-
-        # UNIQUE tx_hash sayesinde
-        # tekrar taramalarda duplicate olmaz.
-        if not saved:
-            continue
-
-        update_wallet(
-            trade
-        )
-
-        saved_count += 1
-
-        print(
-            f"{trade['side']} "
-            f"{trade['token']} "
-            f"${trade['amount_usd']:.6f} "
-            f"wallet={trade['trader']}"
-        )
 
     print(
         f"Yeni kaydedilen swap: "
-        f"{saved_count}"
-    )
-
-    print(
-        f"Chunk tamamlandı: "
-        f"{to_block}"
+        f"{saved_trades}"
     )
 
     return True
@@ -1298,24 +1107,21 @@ def main():
 
     print()
     print(
-        "=" * 70
+        "=" * 100
     )
     print(
         "BASE ALPHA SCANNER"
     )
     print(
-        "=" * 70
+        "=" * 100
     )
 
-    # --------------------------------------------------------
-    # DB
-    # --------------------------------------------------------
+    print(
+        "RPC:",
+        BASE_RPC_URL
+    )
 
     init_db()
-
-    # --------------------------------------------------------
-    # Latest block
-    # --------------------------------------------------------
 
     latest_block = get_latest_block()
 
@@ -1324,18 +1130,19 @@ def main():
         f"{latest_block}"
     )
 
-    # --------------------------------------------------------
-    # Nereden devam ediyoruz?
-    # --------------------------------------------------------
-
-    last_scanned = (
-        get_last_scanned_block()
-    )
+    last_scanned = get_last_scanned_block()
 
     if last_scanned is None:
 
-        start_block = (
-            BACKFILL_START
+        start_block = max(
+            0,
+            latest_block - INITIAL_LOOKBACK,
+        )
+
+        print(
+            f"İlk tarama. "
+            f"Geriye doğru {INITIAL_LOOKBACK} "
+            f"blok taranacak."
         )
 
     else:
@@ -1343,6 +1150,19 @@ def main():
         start_block = (
             last_scanned + 1
         )
+
+        print(
+            f"Son taranan block: "
+            f"{last_scanned}"
+        )
+
+    if start_block > latest_block:
+
+        print(
+            "Yeni taranacak block yok."
+        )
+
+        return
 
     print(
         f"Tarama başlangıcı: "
@@ -1354,101 +1174,86 @@ def main():
         f"{latest_block}"
     )
 
-    # --------------------------------------------------------
-    # Yeni blok yok
-    # --------------------------------------------------------
-
-    if start_block > latest_block:
-
-        print(
-            "Yeni blok yok."
-        )
-
-        return
-
     current = start_block
-
-    # --------------------------------------------------------
-    # Chunk loop
-    # --------------------------------------------------------
 
     while current <= latest_block:
 
-        chunk_end = min(
-            current
-            + CHUNK_SIZE
-            - 1,
+        end_block = min(
+            current + CHUNK_SIZE - 1,
             latest_block,
         )
 
-        try:
+        success = process_chunk(
+            current,
+            end_block,
+        )
 
-            success = process_chunk(
-                current,
-                chunk_end,
-            )
-
-            if not success:
-
-                print()
-                print(
-                    "Chunk başarısız."
-                )
-
-                print(
-                    "Bu chunk tekrar "
-                    "denenmek üzere "
-                    "burada duruyor."
-                )
-
-                break
-
-            # ------------------------------------------------
-            # SADECE BAŞARILI CHUNK'TAN
-            # SONRA STATE İLERLET
-            # ------------------------------------------------
-
-            save_last_scanned_block(
-                chunk_end
-            )
-
-            current = (
-                chunk_end + 1
-            )
-
-        except Exception as e:
+        if not success:
 
             print()
             print(
-                "=" * 70
+                "!" * 100
             )
             print(
-                "CHUNK HATASI"
+                "CHUNK BAŞARISIZ."
             )
             print(
-                str(e)
+                "Bu noktada scanner duruyor."
             )
             print(
-                "=" * 70
+                "last_scanned_block "
+                "güncellenmeyecek."
+            )
+            print(
+                "Sonraki çalışmada aynı "
+                "chunk tekrar denenecek."
+            )
+            print(
+                "!" * 100
             )
 
-            print(
-                "Bu chunk tekrar "
-                "denenmek üzere "
-                "burada duruyor."
-            )
+            return
 
-            break
+        # ----------------------------------------------------
+        # SADECE CHUNK TAMAMLANDIKTAN SONRA STATE GÜNCELLENİR
+        # ----------------------------------------------------
+
+        save_last_scanned_block(
+            end_block
+        )
+
+        print()
+        print(
+            f"Chunk tamamlandı: "
+            f"{current} -> {end_block}"
+        )
+
+        print(
+            f"last_scanned_block = "
+            f"{end_block}"
+        )
+
+        current = end_block + 1
+
+        # Chunk'lar arasında biraz nefes
+        time.sleep(0.5)
 
     print()
     print(
-        "=" * 70
+        "=" * 100
     )
+
     print(
-        "SCAN TAMAMLANDI"
+        "TARAMA TAMAMLANDI"
     )
+
     print(
-        "=" * 70
+        f"Son block: "
+        f"{latest_block}"
+    )
+
+    print(
+        "=" * 100
     )
 
 
