@@ -77,6 +77,46 @@ def init_db():
     """)
 
     db.commit()
+
+    # Mevcut wallet verilerindeki first_seen / last_seen
+    # değerlerini gerçek trades tablosundan yeniden hesapla.
+    cur.execute("""
+        SELECT address
+        FROM wallets
+    """)
+
+    addresses = [
+        row[0]
+        for row in cur.fetchall()
+    ]
+
+    for address in addresses:
+
+        cur.execute("""
+            SELECT
+                MIN(timestamp),
+                MAX(timestamp)
+            FROM trades
+            WHERE trader = ?
+        """, (address,))
+
+        row = cur.fetchone()
+
+        if row and row[0] is not None:
+
+            cur.execute("""
+                UPDATE wallets
+                SET
+                    first_seen = ?,
+                    last_seen = ?
+                WHERE address = ?
+            """, (
+                row[0],
+                row[1],
+                address
+            ))
+
+    db.commit()
     db.close()
 
 
@@ -85,6 +125,7 @@ def save_trade(trade):
     cur = db.cursor()
 
     try:
+
         cur.execute("""
             INSERT INTO trades (
                 tx_hash,
@@ -167,10 +208,15 @@ def get_token_metadata(address):
     cur = db.cursor()
 
     cur.execute("""
-        SELECT symbol, name, decimals
+        SELECT
+            symbol,
+            name,
+            decimals
         FROM token_metadata
         WHERE address = ?
-    """, (address.lower(),))
+    """, (
+        address.lower(),
+    ))
 
     row = cur.fetchone()
 
@@ -186,7 +232,12 @@ def get_token_metadata(address):
     }
 
 
-def save_token_metadata(address, symbol, name, decimals):
+def save_token_metadata(
+    address,
+    symbol,
+    name,
+    decimals
+):
     db = connect()
     cur = db.cursor()
 
@@ -252,7 +303,9 @@ def save_last_scanned_block(block_number):
         ON CONFLICT(key)
         DO UPDATE SET
             value = excluded.value
-    """, (str(block_number),))
+    """, (
+        str(block_number),
+    ))
 
     db.commit()
     db.close()
