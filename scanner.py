@@ -2,7 +2,13 @@ import time
 import requests
 
 from config import BASE_RPC_URL
-from database import init_db, save_trade, update_wallet
+from database import (
+    init_db,
+    save_trade,
+    update_wallet,
+    get_last_scanned_block,
+    save_last_scanned_block
+)
 
 
 TRANSFER_TOPIC = (
@@ -420,20 +426,50 @@ def main():
 
     init_db()
 
-    latest = get_latest_block()
+        latest = get_latest_block()
 
     print(
         "Base latest block:",
         latest
     )
 
-    blocks_to_scan = 5
+    last_scanned_block = get_last_scanned_block()
+
+    if last_scanned_block is None:
+
+        start_block = latest - 4
+
+        print(
+            "İlk çalışma. Son 5 blok taranıyor."
+        )
+
+    else:
+
+        start_block = last_scanned_block + 1
+
+        print(
+            "Son taranan blok:",
+            last_scanned_block
+        )
+
+        print(
+            "Buradan devam ediliyor:",
+            start_block
+        )
+
+    if start_block > latest:
+
+        print(
+            "Yeni taranacak blok yok."
+        )
+
+        return
 
     all_transactions = []
     tx_context = {}
 
     for block_number in range(
-        latest - blocks_to_scan + 1,
+        start_block,
         latest + 1
     ):
 
@@ -678,11 +714,20 @@ def main():
         if found >= 5:
             break
 
-    print("=" * 70)
+        print("=" * 70)
 
     print(
         "Analiz edilen swap:",
         found
+    )
+
+    save_last_scanned_block(
+        latest
+    )
+
+    print(
+        "Son taranan blok kaydedildi:",
+        latest
     )
 
     print()
