@@ -350,26 +350,16 @@ def decode_address(topic):
     ).lower()
 
 
-def decode_amount(
-    raw_amount,
-    decimals
-):
-
+def decode_amount(raw_amount, decimals):
     if decimals is None:
-
         return None
 
+    if not raw_amount or raw_amount in ("0x", "0X"):
+        return 0
+
     try:
-
-        return int(
-            raw_amount,
-            16
-        ) / (
-            10 ** decimals
-        )
-
-    except Exception:
-
+        return int(raw_amount, 16) / (10 ** decimals)
+    except (ValueError, TypeError):
         return None
 
 
@@ -434,10 +424,7 @@ def decode_abi_string(data):
 # TOKEN METADATA
 # ============================================================
 
-def get_token_metadata_batch(
-    token_addresses
-):
-
+def get_token_metadata_batch(token_addresses):
     addresses = sorted(
         set(
             address.lower()
@@ -453,61 +440,55 @@ def get_token_metadata_batch(
     ]
 
     if not new_addresses:
-
         return
 
     calls = []
 
     for address in new_addresses:
-
         calls.extend([
-
             (
                 "eth_call",
-                [{
-                    "to": address,
-                    "data": "0x313ce567"
-                }, "latest"]
+                [
+                    {
+                        "to": address,
+                        "data": "0x313ce567"
+                    },
+                    "latest"
+                ]
             ),
-
             (
                 "eth_call",
-                [{
-                    "to": address,
-                    "data": "0x95d89b41"
-                }, "latest"]
+                [
+                    {
+                        "to": address,
+                        "data": "0x95d89b41"
+                    },
+                    "latest"
+                ]
             ),
-
             (
                 "eth_call",
-                [{
-                    "to": address,
-                    "data": "0x06fdde03"
-                }, "latest"]
+                [
+                    {
+                        "to": address,
+                        "data": "0x06fdde03"
+                    },
+                    "latest"
+                ]
             )
-
         ])
 
     results = []
 
-    batch_size = 30
+    batch_size = 15
 
-    for start in range(
-        0,
-        len(calls),
-        batch_size
-    ):
+    for start in range(0, len(calls), batch_size):
 
-        batch = calls[
-            start:start + batch_size
-        ]
+        batch = calls[start:start + batch_size]
 
         payload = []
 
-        for i, (
-            method,
-            params
-        ) in enumerate(batch):
+        for i, (method, params) in enumerate(batch):
 
             payload.append({
                 "jsonrpc": "2.0",
@@ -516,89 +497,126 @@ def get_token_metadata_batch(
                 "id": i
             })
 
-        for attempt in range(5):
+        success = False
 
-            response = requests.post(
-                BASE_RPC_URL,
-                json=payload,
-                timeout=60
-            )
+        for attempt in range(8):
 
-            if response.status_code == 429:
+            try:
+
+                response = requests.post(
+                    BASE_RPC_URL,
+                    json=payload,
+                    timeout=60
+                )
+
+                if response.status_code == 429:
+
+                    wait = min(
+                        2 ** attempt,
+                        30
+                    )
+
+                    print(
+                        "Metadata 429. Bekleniyor:",
+                        wait,
+                        "sn",
+                        flush=True
+                    )
+
+                    time.sleep(wait)
+
+                    continue
+
+                response.raise_for_status()
+
+                data = response.json()
+
+                result_map = {}
+
+                for item in data:
+
+                    result_map[item.get("id")] = item.get("result")
+
+                for i in range(len(batch)):
+
+                    results.append(
+                        result_map.get(i)
+                    )
+
+                success = True
+
+                break
+
+            except requests.RequestException as error:
+
+                if attempt == 7:
+                    print(
+                        "Metadata RPC hatası:",
+                        error,
+                        flush=True
+                    )
+
+                    break
 
                 wait = min(
                     2 ** attempt,
-                    10
+                    30
                 )
 
                 print(
-                    "Metadata 429. Bekleniyor:",
+                    "Metadata RPC hatası. Bekleniyor:",
                     wait,
-                    "sn"
+                    "sn",
+                    flush=True
                 )
 
                 time.sleep(wait)
 
-                continue
+        if not success:
 
-            response.raise_for_status()
-
-            data = response.json()
-
-            break
-
-        else:
-
-            raise Exception(
-                "Token metadata alınamadı."
+            # Bu batch başarısız olduysa
+            # scanner'ı tamamen durdurma.
+            results.extend(
+                [None] * len(batch)
             )
 
-        result_map = {}
-
-        for item in data:
-
-            result_map[
-                item.get("id")
-            ] = item.get(
-                "result"
-            )
-
-        for i in range(
-            len(batch)
-        ):
-
-            results.append(
-                result_map.get(i)
-            )
-
-    for i, address in enumerate(
-        new_addresses
-    ):
+    for i, address in enumerate(new_addresses):
 
         base = i * 3
 
         decimals = None
+        symbol = ""
+        name = ""
 
-        if results[base]:
+        if base < len(results):
 
-            try:
+            raw_decimals = results[base]
 
-                decimals = int(
-                    results[base],
-                    16
-                )
+            if raw_decimals and raw_decimals not in ("0x", "0X"):
 
-            except Exception:
+                try:
+                    decimals = int(
+                        raw_decimals,
+                        16
+                    )
 
-                decimals = None
+                except (
+                    ValueError,
+                    TypeError
+                ):
+                    decimals = None
 
-        symbol = decode_abi_string(
-            results[base + 1]
-        )
+        if base + 1 < len(results):
 
-        name = decode_abi_string(
-            results[base + 2]
-        )
+            symbol = decode_abi_string(
+                results[base + 1]
+            )
+
+        if base + 2 < len(results):
+
+            name = decode_abi_string(
+                results[base + 2]
+            )
 
         TOKEN_CACHE[address] = {
             "decimals": decimals,
