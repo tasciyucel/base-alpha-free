@@ -1,6 +1,7 @@
 import sqlite3
 from pathlib import Path
 
+
 DB_PATH = Path("alpha.db")
 
 
@@ -28,7 +29,6 @@ def init_db():
         )
     """)
 
-    # Eski alpha.db varsa token_amount kolonunu ekle
     cur.execute("""
         PRAGMA table_info(trades)
     """)
@@ -66,6 +66,13 @@ def init_db():
             score INTEGER,
             timestamp INTEGER,
             UNIQUE(token, timestamp)
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS scanner_state (
+            key TEXT PRIMARY KEY,
+            value TEXT
         )
     """)
 
@@ -163,17 +170,16 @@ def update_wallet(trade):
 
         trade["timestamp"],
         trade["timestamp"]
-        def get_last_scanned_block():
+    ))
+
+    db.commit()
+    db.close()
+
+
+def get_last_scanned_block():
 
     db = connect()
     cur = db.cursor()
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS scanner_state (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    """)
 
     cur.execute("""
         SELECT value
@@ -183,7 +189,6 @@ def update_wallet(trade):
 
     row = cur.fetchone()
 
-    db.commit()
     db.close()
 
     if row is None:
@@ -196,13 +201,6 @@ def save_last_scanned_block(block_number):
 
     db = connect()
     cur = db.cursor()
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS scanner_state (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    """)
 
     cur.execute("""
         INSERT INTO scanner_state (
@@ -218,10 +216,6 @@ def save_last_scanned_block(block_number):
             value = excluded.value
     """, (
         str(block_number),
-    ))
-
-    db.commit()
-    db.close()
     ))
 
     db.commit()
