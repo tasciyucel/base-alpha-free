@@ -212,8 +212,22 @@ def get_token_metadata(token):
     token = token.lower()
 
     if token in TOKEN_CACHE:
-
         return TOKEN_CACHE[token]
+
+    # Base USDC: decimals = 6
+    # RPC'den okumaya gerek yok.
+    if token == USDC_ADDRESS:
+
+        metadata = {
+            "address": token,
+            "name": "USD Coin",
+            "symbol": "USDC",
+            "decimals": 6
+        }
+
+        TOKEN_CACHE[token] = metadata
+
+        return metadata
 
     name = None
     symbol = None
@@ -300,7 +314,6 @@ def get_token_metadata(token):
     }
 
     if decimals is not None:
-
         TOKEN_CACHE[token] = metadata
 
     return metadata
@@ -316,9 +329,10 @@ def decode_amount(data, decimals):
         16
     )
 
+    # Ondalık bilgisi bilinmiyorsa
+    # ham değeri insan okunabilir miktar gibi kullanma.
     if decimals is None:
-
-        return raw_amount
+        return None
 
     return raw_amount / (
         10 ** decimals
