@@ -416,29 +416,40 @@ def main():
     blocks_to_scan = 5
 
     all_transactions = []
+tx_context = {}
 
-    for block_number in range(
-        latest - blocks_to_scan + 1,
-        latest + 1
-    ):
+for block_number in range(
+    latest - blocks_to_scan + 1,
+    latest + 1
+):
 
-        print(
-            "Blok taranıyor:",
-            block_number
-        )
+    print(
+        "Blok taranıyor:",
+        block_number
+    )
 
-        block = get_block(
-            block_number
-        )
+    block = get_block(
+        block_number
+    )
 
-        block_transactions = block.get(
-            "transactions",
-            []
-        )
+    block_timestamp = int(
+        block["timestamp"],
+        16
+    )
 
-        all_transactions.extend(
-            block_transactions
-        )
+    block_transactions = block.get(
+        "transactions",
+        []
+    )
+
+    for tx in block_transactions:
+
+        all_transactions.append(tx)
+
+        tx_context[tx["hash"]] = {
+            "block_number": block_number,
+            "timestamp": block_timestamp
+        }
 
     transactions = all_transactions
 
@@ -504,7 +515,83 @@ def main():
             sent,
             received
         )
+if usd_value is not None:
 
+    usdc_sent = next(
+        (
+            item for item in sent
+            if item["token"].lower() == USDC_ADDRESS
+        ),
+        None
+    )
+
+    usdc_received = next(
+        (
+            item for item in received
+            if item["token"].lower() == USDC_ADDRESS
+        ),
+        None
+    )
+
+    if usdc_sent and not usdc_received:
+
+        side = "BUY"
+
+        token_items = [
+            item for item in received
+            if item["token"].lower() != USDC_ADDRESS
+        ]
+
+    elif usdc_received and not usdc_sent:
+
+        side = "SELL"
+
+        token_items = [
+            item for item in sent
+            if item["token"].lower() != USDC_ADDRESS
+        ]
+
+    else:
+
+        side = None
+        token_items = []
+
+    if side:
+
+        context = tx_context[tx_hash]
+
+        for item in token_items:
+
+            trade = {
+                "tx_hash": tx_hash,
+                "block_number": context["block_number"],
+                "timestamp": context["timestamp"],
+                "trader": wallet.lower(),
+                "token": item["token"],
+                "symbol": item["symbol"],
+                "side": side,
+                "amount_usd": usd_value
+            }
+
+            if save_trade(trade):
+
+                update_wallet(trade)
+
+                print(
+                    "DB KAYDI:",
+                    side,
+                    item["symbol"],
+                    "|",
+                    usd_value,
+                    "USD"
+                )
+
+            else:
+
+                print(
+                    "DB'de zaten var:",
+                    tx_hash
+                )
         print("=" * 70)
 
         print(
