@@ -1,11 +1,6 @@
-base-alpha-free/
-│
-├── scanner.py
-├── database.py
-├── config.py          ← şu anda bunu oluştur
-├── requirements.txt
-├── .gitignore
-│
-└── .github/
-    └── workflows/
-        └── scanner.yml
+import os
+
+BASE_RPC_URL = os.getenv(
+    "BASE_RPC_URL",
+    "https://mainnet.base.org"
+)
