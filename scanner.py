@@ -55,16 +55,25 @@ def get_latest_block():
 
 def get_transfer_logs(start_block, end_block):
 
-    return rpc(
+    print(
+        "TEST: USDC Transfer logları aranıyor..."
+    )
+
+    result = rpc(
         "eth_getLogs",
         [{
             "fromBlock": hex(start_block),
             "toBlock": hex(end_block),
-            "topics": [
-                TRANSFER_TOPIC
-            ]
+            "address": USDC_ADDRESS
         }]
     )
+
+    print(
+        "TEST: USDC log sayısı:",
+        len(result)
+    )
+
+    return result
 
 
 def get_transaction(tx_hash):
