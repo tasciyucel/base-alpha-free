@@ -72,17 +72,141 @@ def topic_to_address(topic):
     return "0x" + topic[-40:]
 
 
+def eth_call(token, selector):
+
+    return rpc(
+        "eth_call",
+        [
+            {
+                "to": token,
+                "data": selector
+            },
+            "latest"
+        ]
+    )
+
+
+def decode_string(data):
+
+    if not data or data == "0x":
+        return None
+
+    raw = bytes.fromhex(data[2:])
+
+    try:
+
+        # Dynamic ABI string
+        if len(raw) >= 64:
+
+            offset = int.from_bytes(
+                raw[0:32],
+                "big"
+            )
+
+            if offset + 32 <= len(raw):
+
+                length = int.from_bytes(
+                    raw[offset:offset + 32],
+                    "big"
+                )
+
+                start = offset + 32
+                end = start + length
+
+                if end <= len(raw):
+
+                    return raw[start:end].decode(
+                        "utf-8",
+                        errors="ignore"
+                    ).strip("\x00")
+
+        # bytes32 fallback
+        return raw.rstrip(b"\x00").decode(
+            "utf-8",
+            errors="ignore"
+        )
+
+    except Exception:
+
+        return None
+
+
+def get_token_metadata(token):
+
+    token = token.lower()
+
+    try:
+
+        name_data = eth_call(
+            token,
+            "0x06fdde03"
+        )
+
+        name = decode_string(
+            name_data
+        )
+
+    except Exception:
+
+        name = None
+
+    try:
+
+        symbol_data = eth_call(
+            token,
+            "0x95d89b41"
+        )
+
+        symbol = decode_string(
+            symbol_data
+        )
+
+    except Exception:
+
+        symbol = None
+
+    try:
+
+        decimals_data = eth_call(
+            token,
+            "0x313ce567"
+        )
+
+        decimals = int(
+            decimals_data,
+            16
+        )
+
+    except Exception:
+
+        decimals = None
+
+    return {
+        "address": token,
+        "name": name or "Unknown",
+        "symbol": symbol or "UNKNOWN",
+        "decimals": decimals
+    }
+
+
 def main():
 
-    print("Base Alpha Scanner başlıyor...")
+    print(
+        "Base Alpha Scanner başlıyor..."
+    )
 
     init_db()
 
     latest = get_latest_block()
 
-    print("Base latest block:", latest)
+    print(
+        "Base latest block:",
+        latest
+    )
 
-    block = get_block(latest)
+    block = get_block(
+        latest
+    )
 
     transactions = block.get(
         "transactions",
@@ -95,6 +219,8 @@ def main():
     )
 
     found = 0
+
+    checked_tokens = set()
 
     for tx in transactions:
 
@@ -122,7 +248,10 @@ def main():
 
         for log in logs:
 
-            topics = log.get("topics", [])
+            topics = log.get(
+                "topics",
+                []
+            )
 
             if len(topics) < 3:
                 continue
@@ -149,63 +278,106 @@ def main():
             if sender == wallet.lower():
                 sent.append(token)
 
-        if not received or not sent:
+        tokens = set(
+            received + sent
+        )
+
+        if not tokens:
             continue
 
         found += 1
 
         print("=" * 70)
 
-        print("MUHTEMEL SWAP")
-        print("Transaction:", tx_hash)
-        print("Wallet:", wallet)
+        print(
+            "SWAP:",
+            tx_hash
+        )
+
+        print(
+            "WALLET:",
+            wallet
+        )
 
         print()
-        print("GÖNDERİLEN:")
+        print("GÖNDERİLEN TOKENLAR:")
 
         for token in set(sent):
 
             if token == WETH:
-                print("WETH")
+
+                print(
+                    "WETH",
+                    WETH
+                )
+
+                continue
+
+            if token not in checked_tokens:
+
+                metadata = get_token_metadata(
+                    token
+                )
+
+                checked_tokens.add(
+                    token
+                )
+
             else:
-                print(token)
+
+                metadata = get_token_metadata(
+                    token
+                )
+
+            print(
+                metadata["symbol"],
+                "|",
+                metadata["name"],
+                "|",
+                token,
+                "| decimals:",
+                metadata["decimals"]
+            )
 
         print()
-        print("ALINAN:")
+        print("ALINAN TOKENLAR:")
 
         for token in set(received):
 
             if token == WETH:
-                print("WETH")
+
+                print(
+                    "WETH",
+                    WETH
+                )
+
+                continue
+
+            if token not in checked_tokens:
+
+                metadata = get_token_metadata(
+                    token
+                )
+
+                checked_tokens.add(
+                    token
+                )
+
             else:
-                print(token)
 
-        non_weth_received = [
-            token
-            for token in set(received)
-            if token != WETH
-        ]
+                metadata = get_token_metadata(
+                    token
+                )
 
-        non_weth_sent = [
-            token
-            for token in set(sent)
-            if token != WETH
-        ]
-
-        if non_weth_received and WETH in sent:
-
-            print()
-            print("SONUÇ: MUHTEMEL BUY")
-
-        elif non_weth_sent and WETH in received:
-
-            print()
-            print("SONUÇ: MUHTEMEL SELL")
-
-        else:
-
-            print()
-            print("SONUÇ: TOKEN-TOKEN veya KARMA SWAP")
+            print(
+                metadata["symbol"],
+                "|",
+                metadata["name"],
+                "|",
+                token,
+                "| decimals:",
+                metadata["decimals"]
+            )
 
         if found >= 5:
             break
@@ -219,7 +391,7 @@ def main():
 
     print()
     print(
-        "BUY/SELL yön analizi tamamlandı."
+        "Token metadata testi tamamlandı."
     )
 
 
