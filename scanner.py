@@ -14,7 +14,9 @@ from database import (
 )
 
 
-USDC_ADDRESS = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+USDC_ADDRESS = (
+    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+)
 
 TRANSFER_TOPIC = (
     "0xddf252ad1be2c89b69c2b068fc378daa952ba7f"
@@ -23,16 +25,18 @@ TRANSFER_TOPIC = (
 
 CHUNK_SIZE = 10
 
+# İlk kez tarama yapılacak başlangıç bloğu.
 BACKFILL_START = 51569194
-BACKFILL_END = 51569821
 
 TOKEN_CACHE = {}
 
 
 def rpc(method, params, retries=6):
+
     for attempt in range(retries):
 
         try:
+
             response = requests.post(
                 BASE_RPC_URL,
                 json={
@@ -45,11 +49,16 @@ def rpc(method, params, retries=6):
             )
 
             if response.status_code == 429:
-                wait = min(2 ** attempt, 15)
+
+                wait = min(
+                    2 ** attempt,
+                    15
+                )
 
                 print(
                     f"429 rate limit... "
-                    f"{method} bekleme: {wait}",
+                    f"{method} "
+                    f"bekleme: {wait}",
                     flush=True
                 )
 
@@ -61,7 +70,9 @@ def rpc(method, params, retries=6):
             payload = response.json()
 
             if "error" in payload:
-                raise RuntimeError(payload["error"])
+                raise RuntimeError(
+                    payload["error"]
+                )
 
             return payload.get("result")
 
@@ -70,7 +81,10 @@ def rpc(method, params, retries=6):
             if attempt == retries - 1:
                 raise
 
-            wait = min(2 ** attempt, 15)
+            wait = min(
+                2 ** attempt,
+                15
+            )
 
             print(
                 f"RPC hata: {method} "
@@ -85,17 +99,27 @@ def rpc(method, params, retries=6):
 
 
 def get_latest_block():
+
     result = rpc(
         "eth_blockNumber",
         []
     )
 
-    return int(result, 16)
+    return int(
+        result,
+        16
+    )
 
 
-def get_usdc_logs(start_block, end_block):
+def get_usdc_logs(
+    start_block,
+    end_block
+):
 
-    print("USDC logları aranıyor...", flush=True)
+    print(
+        "USDC logları aranıyor...",
+        flush=True
+    )
 
     result = rpc(
         "eth_getLogs",
@@ -125,22 +149,33 @@ def get_block_receipts(block_number):
     ) or []
 
 
-def get_receipts_for_blocks(block_numbers):
+def get_receipts_for_blocks(
+    block_numbers
+):
 
     receipts = {}
 
-    for block_number in sorted(block_numbers):
+    for block_number in sorted(
+        block_numbers
+    ):
 
-        block_receipts = get_block_receipts(
-            block_number
+        block_receipts = (
+            get_block_receipts(
+                block_number
+            )
         )
 
         for receipt in block_receipts:
 
-            tx_hash = receipt.get("transactionHash")
+            tx_hash = receipt.get(
+                "transactionHash"
+            )
 
             if tx_hash:
-                receipts[tx_hash.lower()] = receipt
+
+                receipts[
+                    tx_hash.lower()
+                ] = receipt
 
     return receipts
 
@@ -151,7 +186,11 @@ def get_transactions(tx_hashes):
 
     batch_size = 50
 
-    for i in range(0, len(tx_hashes), batch_size):
+    for i in range(
+        0,
+        len(tx_hashes),
+        batch_size
+    ):
 
         batch = tx_hashes[
             i:i + batch_size
@@ -159,7 +198,8 @@ def get_transactions(tx_hashes):
 
         print(
             f"Transaction batch: "
-            f"{i + 1} -> {i + len(batch)}",
+            f"{i + 1} -> "
+            f"{i + len(batch)}",
             flush=True
         )
 
@@ -171,6 +211,7 @@ def get_transactions(tx_hashes):
             )
 
             if result:
+
                 transactions[
                     tx_hash.lower()
                 ] = result
@@ -191,77 +232,42 @@ def raw_amount_int(value):
     if not value:
         return 0
 
-    if value in ("0x", "0X"):
+    if value in (
+        "0x",
+        "0X"
+    ):
         return 0
 
     try:
-        return int(value, 16)
+
+        return int(
+            value,
+            16
+        )
 
     except (
         ValueError,
         TypeError
     ):
+
         return 0
 
 
-def decode_amount(value, decimals):
+def decode_amount(
+    value,
+    decimals
+):
 
-    raw = raw_amount_int(value)
+    raw = raw_amount_int(
+        value
+    )
 
     if raw == 0:
         return 0
 
-    return raw / (10 ** decimals)
-
-
-def decode_abi_string(value):
-
-    if not value or value in ("0x", "0X"):
-        return ""
-
-    try:
-        data = bytes.fromhex(
-            value[2:]
-        )
-
-        if len(data) < 64:
-            return ""
-
-        offset = int.from_bytes(
-            data[:32],
-            "big"
-        )
-
-        if offset + 32 > len(data):
-            return ""
-
-        length_start = offset
-
-        length = int.from_bytes(
-            data[
-                length_start:
-                length_start + 32
-            ],
-            "big"
-        )
-
-        string_start = (
-            length_start + 32
-        )
-
-        string_end = (
-            string_start + length
-        )
-
-        return data[
-            string_start:string_end
-        ].decode(
-            "utf-8",
-            errors="ignore"
-        )
-
-    except Exception:
-        return ""
+    return raw / (
+        10 ** decimals
+    )
 
 
 def get_token_metadata_rpc(address):
@@ -269,12 +275,21 @@ def get_token_metadata_rpc(address):
     address = address.lower()
 
     if address in TOKEN_CACHE:
-        return TOKEN_CACHE[address]
 
-    cached = get_token_metadata(address)
+        return TOKEN_CACHE[
+            address
+        ]
+
+    cached = get_token_metadata(
+        address
+    )
 
     if cached is not None:
-        TOKEN_CACHE[address] = cached
+
+        TOKEN_CACHE[
+            address
+        ] = cached
+
         return cached
 
     decimals = None
@@ -322,7 +337,9 @@ def get_token_metadata_rpc(address):
 
             payload = response.json()
 
-            result = payload.get("result")
+            result = payload.get(
+                "result"
+            )
 
             if result and result not in (
                 "0x",
@@ -330,6 +347,7 @@ def get_token_metadata_rpc(address):
             ):
 
                 try:
+
                     decimals = int(
                         result,
                         16
@@ -339,6 +357,7 @@ def get_token_metadata_rpc(address):
                     ValueError,
                     TypeError
                 ):
+
                     decimals = None
 
             break
@@ -379,14 +398,19 @@ def get_token_metadata_rpc(address):
         decimals
     )
 
-    TOKEN_CACHE[address] = metadata
+    TOKEN_CACHE[
+        address
+    ] = metadata
 
     return metadata
 
 
 def parse_transfer_log(log):
 
-    topics = log.get("topics", [])
+    topics = log.get(
+        "topics",
+        []
+    )
 
     if len(topics) < 3:
         return None
@@ -394,11 +418,13 @@ def parse_transfer_log(log):
     try:
 
         from_address = (
-            "0x" + topics[1][-40:]
+            "0x"
+            + topics[1][-40:]
         ).lower()
 
         to_address = (
-            "0x" + topics[2][-40:]
+            "0x"
+            + topics[2][-40:]
         ).lower()
 
         amount = raw_amount_int(
@@ -440,10 +466,14 @@ def parse_transfer_log(log):
         }
 
     except Exception:
+
         return None
 
 
-def find_swap(tx, receipt):
+def find_swap(
+    tx,
+    receipt
+):
 
     if not tx or not receipt:
         return None
@@ -492,6 +522,7 @@ def find_swap(tx, receipt):
         token = parsed["token"]
 
         if parsed["timestamp"]:
+
             block_timestamp = max(
                 block_timestamp,
                 parsed["timestamp"]
@@ -500,33 +531,40 @@ def find_swap(tx, receipt):
         if parsed["from"] == trader:
 
             if token == USDC_ADDRESS:
+
                 usdc_sent += (
                     parsed["amount_raw"]
                 )
 
             else:
+
                 token_sent[token] = (
-                    token_sent.get(token, 0)
+                    token_sent.get(
+                        token,
+                        0
+                    )
                     + parsed["amount_raw"]
                 )
 
         if parsed["to"] == trader:
 
             if token == USDC_ADDRESS:
+
                 usdc_received += (
                     parsed["amount_raw"]
                 )
 
             else:
+
                 token_received[token] = (
-                    token_received.get(token, 0)
+                    token_received.get(
+                        token,
+                        0
+                    )
                     + parsed["amount_raw"]
                 )
 
-    # BUY:
-    # Trader USDC gönderiyor
-    # Trader token alıyor
-
+    # BUY
     if (
         usdc_sent > 0
         and token_received
@@ -545,10 +583,7 @@ def find_swap(tx, receipt):
             "timestamp": block_timestamp
         }
 
-    # SELL:
-    # Trader token gönderiyor
-    # Trader USDC alıyor
-
+    # SELL
     if (
         usdc_received > 0
         and token_sent
@@ -583,7 +618,9 @@ def analyze_transaction(
     if not swap:
         return False
 
-    token_address = swap["token"]
+    token_address = swap[
+        "token"
+    ]
 
     metadata = get_token_metadata_rpc(
         token_address
@@ -613,19 +650,24 @@ def analyze_transaction(
     )
 
     if not symbol:
+
         symbol = (
             token_address[:10]
             + "..."
         )
 
-    timestamp = swap["timestamp"]
+    timestamp = swap[
+        "timestamp"
+    ]
 
     if timestamp == 0:
+
         timestamp = int(
             time.time()
         )
 
     trade = {
+
         "tx_hash": tx.get(
             "hash",
             ""
@@ -662,6 +704,7 @@ def analyze_transaction(
     )
 
     if saved:
+
         update_wallet(
             trade
         )
@@ -685,7 +728,8 @@ def process_block_range(
     print()
     print(
         f"Chunk: "
-        f"{start_block} -> {end_block}",
+        f"{start_block} -> "
+        f"{end_block}",
         flush=True
     )
 
@@ -704,10 +748,13 @@ def process_block_range(
 
     for log in logs:
 
-        if (
-            len(log.get("topics", []))
-            >= 3
-        ):
+        if len(
+            log.get(
+                "topics",
+                []
+            )
+        ) >= 3:
+
             transfer_logs.append(
                 log
             )
@@ -791,6 +838,7 @@ def process_block_range(
         )
 
         if swap:
+
             real_candidates.append(
                 (
                     tx,
@@ -814,6 +862,7 @@ def process_block_range(
         )
 
         if swap:
+
             token_addresses.add(
                 swap["token"]
             )
@@ -870,7 +919,9 @@ def main():
 
     if last_scanned is None:
 
-        start_block = BACKFILL_START
+        start_block = (
+            BACKFILL_START
+        )
 
     else:
 
@@ -878,10 +929,9 @@ def main():
             last_scanned + 1
         )
 
-    end_block = min(
-        BACKFILL_END,
-        latest_block
-    )
+    # Artık sabit BACKFILL_END yok.
+    # Her çalışmada güncel latest block'a kadar gider.
+    end_block = latest_block
 
     print(
         f"Tarama başlangıcı: "
@@ -920,6 +970,8 @@ def main():
                 chunk_end
             )
 
+            # Chunk tamamen başarılı olduktan sonra
+            # ilerleme kaydediliyor.
             save_last_scanned_block(
                 chunk_end
             )
