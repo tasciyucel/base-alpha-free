@@ -7,7 +7,6 @@ on:
     - cron: "*/5 * * * *"
 
 jobs:
-
   scan:
 
     runs-on: ubuntu-latest
@@ -16,7 +15,6 @@ jobs:
       contents: read
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
