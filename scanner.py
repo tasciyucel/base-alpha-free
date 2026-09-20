@@ -1,3 +1,4 @@
+import time
 import requests
 
 from config import BASE_RPC_URL
@@ -7,16 +8,13 @@ from database import init_db
 def rpc(method, params=None):
 
     response = requests.post(
-
         BASE_RPC_URL,
-
         json={
             "jsonrpc": "2.0",
             "method": method,
             "params": params or [],
             "id": 1
         },
-
         timeout=30
     )
 
@@ -25,10 +23,7 @@ def rpc(method, params=None):
     data = response.json()
 
     if "error" in data:
-
-        raise RuntimeError(
-            data["error"]
-        )
+        raise RuntimeError(data["error"])
 
     return data["result"]
 
@@ -56,19 +51,6 @@ def get_block(block_number):
     )
 
 
-def is_eoa(address):
-
-    code = rpc(
-        "eth_getCode",
-        [
-            address,
-            "latest"
-        ]
-    )
-
-    return code == "0x"
-
-
 def main():
 
     print(
@@ -94,63 +76,35 @@ def main():
     )
 
     print(
-        "Bu bloktaki transaction:",
+        "Blok:",
+        latest
+    )
+
+    print(
+        "Transaction sayısı:",
         len(transactions)
     )
 
-    eoa_count = 0
+    print()
+    print(
+        "İlk transactionlar:"
+    )
 
-    checked = set()
+    for tx in transactions[:10]:
 
-    for tx in transactions:
-
-        sender = tx.get("from")
-
-        if not sender:
-            continue
-
-        sender = sender.lower()
-
-        if sender in checked:
-            continue
-
-        checked.add(sender)
-
-        try:
-
-            if is_eoa(sender):
-
-                eoa_count += 1
-
-                print(
-                    "EOA:",
-                    sender
-                )
-
-        except Exception as error:
-
-            print(
-                "EOA kontrol hatası:",
-                error
-            )
+        print(
+            tx.get("hash"),
+            "|",
+            tx.get("from"),
+            "→",
+            tx.get("to")
+        )
 
     print()
     print(
-        "Kontrol edilen farklı adres:",
-        len(checked)
-    )
-
-    print(
-        "Bulunan EOA:",
-        eoa_count
-    )
-
-    print()
-    print(
-        "Test tamamlandı."
+        "Blockchain bağlantı testi başarılı."
     )
 
 
 if __name__ == "__main__":
-
     main()
