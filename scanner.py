@@ -2,7 +2,7 @@ import time
 import requests
 
 from config import BASE_RPC_URL
-from database import init_db
+from database import init_db, save_trade, update_wallet
 
 
 TRANSFER_TOPIC = (
