@@ -575,6 +575,7 @@ def main():
                         "symbol": item["symbol"],
                         "side": side,
                         "amount_usd": usd_value
+                        "token_amount": item["amount"]
                     }
 
                     if save_trade(trade):
