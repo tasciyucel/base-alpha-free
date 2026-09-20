@@ -14,6 +14,9 @@ UNISWAP_UNIVERSAL_ROUTER = (
     "0x6ff5693b99212da76ad316178a184ab56d299b43"
 )
 
+USDC_ADDRESS = (
+    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+)
 
 TOKEN_CACHE = {}
 
@@ -37,7 +40,6 @@ def rpc(method, params=None, retries=4):
                 timeout=30
             )
 
-            # Rate limit
             if response.status_code == 429:
 
                 wait_time = 2 ** attempt
@@ -48,9 +50,7 @@ def rpc(method, params=None, retries=4):
                     "saniye bekleniyor..."
                 )
 
-                time.sleep(
-                    wait_time
-                )
+                time.sleep(wait_time)
 
                 continue
 
@@ -59,6 +59,7 @@ def rpc(method, params=None, retries=4):
             data = response.json()
 
             if "error" in data:
+
                 raise RuntimeError(
                     data["error"]
                 )
@@ -73,9 +74,7 @@ def rpc(method, params=None, retries=4):
 
                 wait_time = 2 ** attempt
 
-                time.sleep(
-                    wait_time
-                )
+                time.sleep(wait_time)
 
     raise last_error
 
@@ -214,15 +213,14 @@ def get_token_metadata(token):
 
     token = token.lower()
 
-    # Daha önce başarıyla alınmışsa tekrar RPC çağrısı yapma
     if token in TOKEN_CACHE:
+
         return TOKEN_CACHE[token]
 
     name = None
     symbol = None
     decimals = None
 
-    # NAME
     try:
 
         name_data = eth_call(
@@ -243,10 +241,8 @@ def get_token_metadata(token):
             str(e)
         )
 
-    # RPC'yi yormamak için kısa bekleme
     time.sleep(0.15)
 
-    # SYMBOL
     try:
 
         symbol_data = eth_call(
@@ -269,7 +265,6 @@ def get_token_metadata(token):
 
     time.sleep(0.15)
 
-    # DECIMALS
     try:
 
         decimals_data = eth_call(
@@ -306,7 +301,6 @@ def get_token_metadata(token):
         "decimals": decimals
     }
 
-    # Sadece başarılı decimals bilgisini cache'e koy
     if decimals is not None:
 
         TOKEN_CACHE[token] = metadata
@@ -393,6 +387,19 @@ def analyze_transfer(log, wallet):
     return result
 
 
+def calculate_usd_value(sent, received):
+
+    all_tokens = sent + received
+
+    for item in all_tokens:
+
+        if item["token"].lower() == USDC_ADDRESS:
+
+            return item["amount"]
+
+    return None
+
+
 def main():
 
     print(
@@ -475,6 +482,11 @@ def main():
 
         found += 1
 
+        usd_value = calculate_usd_value(
+            sent,
+            received
+        )
+
         print("=" * 70)
 
         print(
@@ -486,6 +498,19 @@ def main():
             "WALLET:",
             wallet
         )
+
+        if usd_value is not None:
+
+            print(
+                "USD DEĞERİ:",
+                usd_value
+            )
+
+        else:
+
+            print(
+                "USD DEĞERİ: Hesaplanamadı"
+            )
 
         print()
         print(
@@ -537,9 +562,10 @@ def main():
 
     print()
     print(
-        "Token miktarı testi tamamlandı."
+        "USD değer testi tamamlandı."
     )
 
 
 if __name__ == "__main__":
+
     main()
