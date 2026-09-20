@@ -1,8 +1,13 @@
-import time
 import requests
 
 from config import BASE_RPC_URL
 from database import init_db
+
+
+TRANSFER_TOPIC = (
+    "0xddf252ad1be2c89b69c2b068fc378daa"
+    "952ba7f163c4a11628f55a4df523b3ef"
+)
 
 
 def rpc(method, params=None):
@@ -30,32 +35,35 @@ def rpc(method, params=None):
 
 def get_latest_block():
 
-    block = rpc(
-        "eth_blockNumber"
-    )
+    block = rpc("eth_blockNumber")
 
-    return int(
-        block,
-        16
-    )
+    return int(block, 16)
 
 
-def get_block(block_number):
+def get_transfer_logs(block_number):
 
     return rpc(
-        "eth_getBlockByNumber",
+        "eth_getLogs",
         [
-            hex(block_number),
-            True
+            {
+                "fromBlock": hex(block_number),
+                "toBlock": hex(block_number),
+                "topics": [
+                    TRANSFER_TOPIC
+                ]
+            }
         ]
     )
 
 
+def topic_to_address(topic):
+
+    return "0x" + topic[-40:]
+
+
 def main():
 
-    print(
-        "Base Alpha Scanner başlıyor..."
-    )
+    print("Base Alpha Scanner başlıyor...")
 
     init_db()
 
@@ -66,43 +74,57 @@ def main():
         latest
     )
 
-    block = get_block(
-        latest
-    )
-
-    transactions = block.get(
-        "transactions",
-        []
-    )
+    logs = get_transfer_logs(latest)
 
     print(
-        "Blok:",
-        latest
-    )
-
-    print(
-        "Transaction sayısı:",
-        len(transactions)
+        "Transfer event sayısı:",
+        len(logs)
     )
 
     print()
-    print(
-        "İlk transactionlar:"
-    )
 
-    for tx in transactions[:10]:
+    for log in logs[:10]:
 
-        print(
-            tx.get("hash"),
-            "|",
-            tx.get("from"),
-            "→",
-            tx.get("to")
+        topics = log.get("topics", [])
+
+        if len(topics) < 3:
+            continue
+
+        token = log.get("address")
+
+        sender = topic_to_address(
+            topics[1]
         )
 
+        receiver = topic_to_address(
+            topics[2]
+        )
+
+        print(
+            "Token:",
+            token
+        )
+
+        print(
+            "From:",
+            sender
+        )
+
+        print(
+            "To:",
+            receiver
+        )
+
+        print(
+            "Tx:",
+            log.get("transactionHash")
+        )
+
+        print("-" * 60)
+
     print()
     print(
-        "Blockchain bağlantı testi başarılı."
+        "Token transfer taraması başarılı."
     )
 
 
