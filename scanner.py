@@ -649,7 +649,7 @@ def main():
 
     # Büyük aralıkları küçük parçalara böl.
     # Böylece RPC limitlerine takılma ihtimali azalır.
-    CHUNK_SIZE = 50
+    CHUNK_SIZE = 10
 
     current_block = start_block
 
