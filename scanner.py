@@ -18,6 +18,9 @@ WETH = (
 )
 
 
+TOKEN_CACHE = {}
+
+
 def rpc(method, params=None):
 
     response = requests.post(
@@ -95,11 +98,10 @@ def decode_string(data):
 
     try:
 
-        # Dynamic ABI string
         if len(raw) >= 64:
 
             offset = int.from_bytes(
-                raw[0:32],
+                raw[:32],
                 "big"
             )
 
@@ -115,16 +117,22 @@ def decode_string(data):
 
                 if end <= len(raw):
 
-                    return raw[start:end].decode(
+                    value = raw[start:end].decode(
                         "utf-8",
                         errors="ignore"
-                    ).strip("\x00")
+                    )
 
-        # bytes32 fallback
-        return raw.rstrip(b"\x00").decode(
+                    if value:
+                        return value.strip("\x00")
+
+        value = raw.rstrip(
+            b"\x00"
+        ).decode(
             "utf-8",
             errors="ignore"
         )
+
+        return value or None
 
     except Exception:
 
@@ -135,15 +143,16 @@ def get_token_metadata(token):
 
     token = token.lower()
 
+    if token in TOKEN_CACHE:
+        return TOKEN_CACHE[token]
+
     try:
 
-        name_data = eth_call(
-            token,
-            "0x06fdde03"
-        )
-
         name = decode_string(
-            name_data
+            eth_call(
+                token,
+                "0x06fdde03"
+            )
         )
 
     except Exception:
@@ -152,13 +161,11 @@ def get_token_metadata(token):
 
     try:
 
-        symbol_data = eth_call(
-            token,
-            "0x95d89b41"
-        )
-
         symbol = decode_string(
-            symbol_data
+            eth_call(
+                token,
+                "0x95d89b41"
+            )
         )
 
     except Exception:
@@ -181,12 +188,94 @@ def get_token_metadata(token):
 
         decimals = None
 
-    return {
+    metadata = {
         "address": token,
         "name": name or "Unknown",
         "symbol": symbol or "UNKNOWN",
         "decimals": decimals
     }
+
+    TOKEN_CACHE[token] = metadata
+
+    return metadata
+
+
+def decode_amount(data, decimals):
+
+    if not data or data == "0x":
+        return 0
+
+    raw_amount = int(
+        data,
+        16
+    )
+
+    if decimals is None:
+        return raw_amount
+
+    return raw_amount / (
+        10 ** decimals
+    )
+
+
+def analyze_transfer(log, wallet):
+
+    topics = log.get(
+        "topics",
+        []
+    )
+
+    if len(topics) < 3:
+        return None
+
+    if topics[0].lower() != TRANSFER_TOPIC:
+        return None
+
+    token = log.get(
+        "address",
+        ""
+    ).lower()
+
+    sender = topic_to_address(
+        topics[1]
+    ).lower()
+
+    receiver = topic_to_address(
+        topics[2]
+    ).lower()
+
+    metadata = get_token_metadata(
+        token
+    )
+
+    amount = decode_amount(
+        log.get("data"),
+        metadata["decimals"]
+    )
+
+    result = {
+        "token": token,
+        "symbol": metadata["symbol"],
+        "name": metadata["name"],
+        "decimals": metadata["decimals"],
+        "amount": amount,
+        "from": sender,
+        "to": receiver
+    }
+
+    if receiver == wallet.lower():
+
+        result["direction"] = "RECEIVED"
+
+    elif sender == wallet.lower():
+
+        result["direction"] = "SENT"
+
+    else:
+
+        result["direction"] = "OTHER"
+
+    return result
 
 
 def main():
@@ -220,8 +309,6 @@ def main():
 
     found = 0
 
-    checked_tokens = set()
-
     for tx in transactions:
 
         tx_hash = tx.get("hash")
@@ -248,41 +335,27 @@ def main():
 
         for log in logs:
 
-            topics = log.get(
-                "topics",
-                []
+            transfer = analyze_transfer(
+                log,
+                wallet
             )
 
-            if len(topics) < 3:
+            if not transfer:
                 continue
 
-            if topics[0].lower() != TRANSFER_TOPIC:
-                continue
+            if transfer["direction"] == "RECEIVED":
 
-            token = log.get(
-                "address",
-                ""
-            ).lower()
+                received.append(
+                    transfer
+                )
 
-            sender = topic_to_address(
-                topics[1]
-            ).lower()
+            elif transfer["direction"] == "SENT":
 
-            receiver = topic_to_address(
-                topics[2]
-            ).lower()
+                sent.append(
+                    transfer
+                )
 
-            if receiver == wallet.lower():
-                received.append(token)
-
-            if sender == wallet.lower():
-                sent.append(token)
-
-        tokens = set(
-            received + sent
-        )
-
-        if not tokens:
+        if not received or not sent:
             continue
 
         found += 1
@@ -300,83 +373,41 @@ def main():
         )
 
         print()
-        print("GÖNDERİLEN TOKENLAR:")
+        print(
+            "GÖNDERİLEN TOKENLAR:"
+        )
 
-        for token in set(sent):
-
-            if token == WETH:
-
-                print(
-                    "WETH",
-                    WETH
-                )
-
-                continue
-
-            if token not in checked_tokens:
-
-                metadata = get_token_metadata(
-                    token
-                )
-
-                checked_tokens.add(
-                    token
-                )
-
-            else:
-
-                metadata = get_token_metadata(
-                    token
-                )
+        for item in sent:
 
             print(
-                metadata["symbol"],
+                item["symbol"],
                 "|",
-                metadata["name"],
-                "|",
-                token,
+                item["name"],
+                "| miktar:",
+                item["amount"],
                 "| decimals:",
-                metadata["decimals"]
+                item["decimals"],
+                "|",
+                item["token"]
             )
 
         print()
-        print("ALINAN TOKENLAR:")
+        print(
+            "ALINAN TOKENLAR:"
+        )
 
-        for token in set(received):
-
-            if token == WETH:
-
-                print(
-                    "WETH",
-                    WETH
-                )
-
-                continue
-
-            if token not in checked_tokens:
-
-                metadata = get_token_metadata(
-                    token
-                )
-
-                checked_tokens.add(
-                    token
-                )
-
-            else:
-
-                metadata = get_token_metadata(
-                    token
-                )
+        for item in received:
 
             print(
-                metadata["symbol"],
+                item["symbol"],
                 "|",
-                metadata["name"],
-                "|",
-                token,
+                item["name"],
+                "| miktar:",
+                item["amount"],
                 "| decimals:",
-                metadata["decimals"]
+                item["decimals"],
+                "|",
+                item["token"]
             )
 
         if found >= 5:
@@ -391,7 +422,7 @@ def main():
 
     print()
     print(
-        "Token metadata testi tamamlandı."
+        "Token miktarı testi tamamlandı."
     )
 
 
