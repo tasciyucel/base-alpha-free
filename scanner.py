@@ -13,6 +13,10 @@ UNISWAP_UNIVERSAL_ROUTER = (
     "0x6ff5693b99212da76ad316178a184ab56d299b43"
 )
 
+WETH = (
+    "0x4200000000000000000000000000000000000006"
+)
+
 
 def rpc(method, params=None):
 
@@ -76,10 +80,7 @@ def main():
 
     latest = get_latest_block()
 
-    print(
-        "Base latest block:",
-        latest
-    )
+    print("Base latest block:", latest)
 
     block = get_block(latest)
 
@@ -93,14 +94,15 @@ def main():
         len(transactions)
     )
 
-    swap_count = 0
+    found = 0
 
     for tx in transactions:
 
         tx_hash = tx.get("hash")
         tx_to = tx.get("to")
+        wallet = tx.get("from")
 
-        if not tx_hash or not tx_to:
+        if not tx_hash or not tx_to or not wallet:
             continue
 
         if tx_to.lower() != UNISWAP_UNIVERSAL_ROUTER:
@@ -115,14 +117,12 @@ def main():
             []
         )
 
-        transfers = []
+        received = []
+        sent = []
 
         for log in logs:
 
-            topics = log.get(
-                "topics",
-                []
-            )
+            topics = log.get("topics", [])
 
             if len(topics) < 3:
                 continue
@@ -130,83 +130,96 @@ def main():
             if topics[0].lower() != TRANSFER_TOPIC:
                 continue
 
-            transfers.append({
+            token = log.get(
+                "address",
+                ""
+            ).lower()
 
-                "token": log.get("address"),
+            sender = topic_to_address(
+                topics[1]
+            ).lower()
 
-                "from": topic_to_address(
-                    topics[1]
-                ),
+            receiver = topic_to_address(
+                topics[2]
+            ).lower()
 
-                "to": topic_to_address(
-                    topics[2]
-                )
+            if receiver == wallet.lower():
+                received.append(token)
 
-            })
+            if sender == wallet.lower():
+                sent.append(token)
 
-        if not transfers:
+        if not received or not sent:
             continue
 
-        swap_count += 1
+        found += 1
 
         print("=" * 70)
 
-        print(
-            "Muhtemel Uniswap swap:"
-        )
+        print("MUHTEMEL SWAP")
+        print("Transaction:", tx_hash)
+        print("Wallet:", wallet)
 
-        print(
-            "Transaction:",
-            tx_hash
-        )
+        print()
+        print("GÖNDERİLEN:")
 
-        print(
-            "Cüzdan:",
-            tx.get("from")
-        )
+        for token in set(sent):
 
-        print(
-            "Router:",
-            tx_to
-        )
+            if token == WETH:
+                print("WETH")
+            else:
+                print(token)
 
-        print(
-            "Token transferleri:",
-            len(transfers)
-        )
+        print()
+        print("ALINAN:")
 
-        for transfer in transfers[:10]:
+        for token in set(received):
 
-            print(
-                "Token:",
-                transfer["token"]
-            )
+            if token == WETH:
+                print("WETH")
+            else:
+                print(token)
 
-            print(
-                "From:",
-                transfer["from"]
-            )
+        non_weth_received = [
+            token
+            for token in set(received)
+            if token != WETH
+        ]
 
-            print(
-                "To:",
-                transfer["to"]
-            )
+        non_weth_sent = [
+            token
+            for token in set(sent)
+            if token != WETH
+        ]
+
+        if non_weth_received and WETH in sent:
 
             print()
+            print("SONUÇ: MUHTEMEL BUY")
 
-        if swap_count >= 5:
+        elif non_weth_sent and WETH in received:
+
+            print()
+            print("SONUÇ: MUHTEMEL SELL")
+
+        else:
+
+            print()
+            print("SONUÇ: TOKEN-TOKEN veya KARMA SWAP")
+
+        if found >= 5:
             break
 
     print("=" * 70)
 
     print(
-        "Bulunan muhtemel swap:",
-        swap_count
+        "Analiz edilen swap:",
+        found
     )
 
     print()
     print(
-        "Swap taraması tamamlandı."
+        "BUY/SELL yön analizi tamamlandı."
     )
 
 
