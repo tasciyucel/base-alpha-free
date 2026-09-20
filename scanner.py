@@ -61,6 +61,19 @@ def topic_to_address(topic):
     return "0x" + topic[-40:]
 
 
+def is_eoa(address):
+
+    code = rpc(
+        "eth_getCode",
+        [
+            address,
+            "latest"
+        ]
+    )
+
+    return code == "0x"
+
+
 def main():
 
     print("Base Alpha Scanner başlıyor...")
@@ -81,9 +94,12 @@ def main():
         len(logs)
     )
 
+    checked = set()
+    eoa_count = 0
+
     print()
 
-    for log in logs[:10]:
+    for log in logs:
 
         topics = log.get("topics", [])
 
@@ -100,31 +116,53 @@ def main():
             topics[2]
         )
 
-        print(
-            "Token:",
-            token
-        )
+        for address in [sender, receiver]:
 
-        print(
-            "From:",
-            sender
-        )
+            address = address.lower()
 
-        print(
-            "To:",
-            receiver
-        )
+            if address in checked:
+                continue
 
-        print(
-            "Tx:",
-            log.get("transactionHash")
-        )
+            checked.add(address)
 
-        print("-" * 60)
+            try:
+
+                if is_eoa(address):
+
+                    eoa_count += 1
+
+                    print(
+                        "EOA:",
+                        address
+                    )
+
+                    print(
+                        "Token:",
+                        token
+                    )
+
+                    print()
+
+            except Exception as error:
+
+                print(
+                    "EOA kontrol hatası:",
+                    error
+                )
+
+    print(
+        "Kontrol edilen adres:",
+        len(checked)
+    )
+
+    print(
+        "Bulunan EOA:",
+        eoa_count
+    )
 
     print()
     print(
-        "Token transfer taraması başarılı."
+        "EOA kontrolü başarılı."
     )
 
 
