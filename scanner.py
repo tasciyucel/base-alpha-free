@@ -45,7 +45,42 @@ def rpc(method, params):
         raise Exception(data["error"])
 
     return data["result"]
+def rpc_batch(calls):
 
+    payload = []
+
+    for i, (method, params) in enumerate(calls):
+
+        payload.append({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+            "id": i
+        })
+
+    response = requests.post(
+        BASE_RPC_URL,
+        json=payload,
+        timeout=60
+    )
+
+    response.raise_for_status()
+
+    results = response.json()
+
+    result_map = {}
+
+    for item in results:
+
+        if "error" in item:
+            result_map[item["id"]] = None
+        else:
+            result_map[item["id"]] = item["result"]
+
+    return [
+        result_map.get(i)
+        for i in range(len(calls))
+    ]
 
 def get_latest_block():
 
