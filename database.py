@@ -11,70 +11,61 @@ def connect():
 def init_db():
 
     db = connect()
-
     cur = db.cursor()
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS trades (
-
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-
             tx_hash TEXT UNIQUE,
-
             block_number INTEGER,
-
             timestamp INTEGER,
-
             trader TEXT,
-
             token TEXT,
-
             symbol TEXT,
-
             side TEXT,
-
-            amount_usd REAL
-
+            amount_usd REAL,
+            token_amount REAL DEFAULT 0
         )
     """)
 
+    # Eski alpha.db varsa token_amount kolonunu ekle
+    cur.execute("""
+        PRAGMA table_info(trades)
+    """)
+
+    columns = [
+        row[1]
+        for row in cur.fetchall()
+    ]
+
+    if "token_amount" not in columns:
+
+        cur.execute("""
+            ALTER TABLE trades
+            ADD COLUMN token_amount REAL DEFAULT 0
+        """)
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS wallets (
-
             address TEXT PRIMARY KEY,
-
             trades INTEGER DEFAULT 0,
-
             buys INTEGER DEFAULT 0,
-
             sells INTEGER DEFAULT 0,
-
             buy_usd REAL DEFAULT 0,
-
             sell_usd REAL DEFAULT 0,
-
             first_seen INTEGER,
-
             last_seen INTEGER
-
         )
     """)
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS alerts (
-
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-
             token TEXT,
-
             symbol TEXT,
-
             score INTEGER,
-
             timestamp INTEGER,
-
             UNIQUE(token, timestamp)
-
         )
     """)
 
@@ -83,15 +74,25 @@ def init_db():
 
 
 def save_trade(trade):
+
     db = connect()
     cur = db.cursor()
 
     try:
+
         cur.execute("""
             INSERT INTO trades (
-                tx_hash, block_number, timestamp, trader, token, symbol, side, amount_usd
+                tx_hash,
+                block_number,
+                timestamp,
+                trader,
+                token,
+                symbol,
+                side,
+                amount_usd,
+                token_amount
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             trade["tx_hash"],
             trade["block_number"],
@@ -100,30 +101,32 @@ def save_trade(trade):
             trade["token"],
             trade["symbol"],
             trade["side"],
-            trade["amount_usd"]
+            trade["amount_usd"],
+            trade["token_amount"]
         ))
 
         db.commit()
+
         return True
 
     except sqlite3.IntegrityError:
+
         return False
 
     finally:
+
         db.close()
 
 
 def update_wallet(trade):
 
     db = connect()
-
     cur = db.cursor()
 
     address = trade["trader"]
 
     cur.execute("""
         INSERT INTO wallets (
-
             address,
             trades,
             buys,
@@ -132,35 +135,18 @@ def update_wallet(trade):
             sell_usd,
             first_seen,
             last_seen
-
         )
-
         VALUES (?, 1, ?, ?, ?, ?, ?, ?)
 
         ON CONFLICT(address)
-
         DO UPDATE SET
-
-            trades =
-                trades + 1,
-
-            buys =
-                buys + excluded.buys,
-
-            sells =
-                sells + excluded.sells,
-
-            buy_usd =
-                buy_usd + excluded.buy_usd,
-
-            sell_usd =
-                sell_usd + excluded.sell_usd,
-
-            last_seen =
-                excluded.last_seen
-
+            trades = trades + 1,
+            buys = buys + excluded.buys,
+            sells = sells + excluded.sells,
+            buy_usd = buy_usd + excluded.buy_usd,
+            sell_usd = sell_usd + excluded.sell_usd,
+            last_seen = excluded.last_seen
     """, (
-
         address,
 
         1 if trade["side"] == "BUY" else 0,
@@ -176,9 +162,7 @@ def update_wallet(trade):
         else 0,
 
         trade["timestamp"],
-
         trade["timestamp"]
-
     ))
 
     db.commit()
