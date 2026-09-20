@@ -9,6 +9,10 @@ TRANSFER_TOPIC = (
     "952ba7f163c4a11628f55a4df523b3ef"
 )
 
+UNISWAP_UNIVERSAL_ROUTER = (
+    "0x6ff5693b99212da76ad316178a184ab56d299b43"
+)
+
 
 def rpc(method, params=None):
 
@@ -51,17 +55,17 @@ def get_block(block_number):
     )
 
 
-def topic_to_address(topic):
-
-    return "0x" + topic[-40:]
-
-
 def get_transaction_receipt(tx_hash):
 
     return rpc(
         "eth_getTransactionReceipt",
         [tx_hash]
     )
+
+
+def topic_to_address(topic):
+
+    return "0x" + topic[-40:]
 
 
 def main():
@@ -89,15 +93,17 @@ def main():
         len(transactions)
     )
 
-    print()
-
-    found = 0
+    swap_count = 0
 
     for tx in transactions:
 
         tx_hash = tx.get("hash")
+        tx_to = tx.get("to")
 
-        if not tx_hash:
+        if not tx_hash or not tx_to:
+            continue
+
+        if tx_to.lower() != UNISWAP_UNIVERSAL_ROUTER:
             continue
 
         receipt = get_transaction_receipt(
@@ -134,18 +140,20 @@ def main():
 
                 "to": topic_to_address(
                     topics[2]
-                ),
-
-                "tx_hash": tx_hash
+                )
 
             })
 
         if not transfers:
             continue
 
-        found += 1
+        swap_count += 1
 
         print("=" * 70)
+
+        print(
+            "Muhtemel Uniswap swap:"
+        )
 
         print(
             "Transaction:",
@@ -158,11 +166,16 @@ def main():
         )
 
         print(
-            "Token hareketleri:",
+            "Router:",
+            tx_to
+        )
+
+        print(
+            "Token transferleri:",
             len(transfers)
         )
 
-        for transfer in transfers[:5]:
+        for transfer in transfers[:10]:
 
             print(
                 "Token:",
@@ -181,19 +194,19 @@ def main():
 
             print()
 
-        if found >= 10:
+        if swap_count >= 5:
             break
 
     print("=" * 70)
 
     print(
-        "İncelenen token işlem örneği:",
-        found
+        "Bulunan muhtemel swap:",
+        swap_count
     )
 
     print()
     print(
-        "Transaction → Token ilişkisi başarıyla okundu."
+        "Swap taraması tamamlandı."
     )
 
 
