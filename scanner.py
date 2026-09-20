@@ -18,7 +18,7 @@ UNISWAP_UNIVERSAL_ROUTER = (
 TOKEN_CACHE = {}
 
 
-def rpc(method, params=None, retries=3):
+def rpc(method, params=None, retries=4):
 
     last_error = None
 
@@ -37,12 +37,31 @@ def rpc(method, params=None, retries=3):
                 timeout=30
             )
 
+            # Rate limit
+            if response.status_code == 429:
+
+                wait_time = 2 ** attempt
+
+                print(
+                    "RPC rate limit (429).",
+                    wait_time,
+                    "saniye bekleniyor..."
+                )
+
+                time.sleep(
+                    wait_time
+                )
+
+                continue
+
             response.raise_for_status()
 
             data = response.json()
 
             if "error" in data:
-                raise RuntimeError(data["error"])
+                raise RuntimeError(
+                    data["error"]
+                )
 
             return data["result"]
 
@@ -51,7 +70,12 @@ def rpc(method, params=None, retries=3):
             last_error = e
 
             if attempt < retries - 1:
-                time.sleep(1)
+
+                wait_time = 2 ** attempt
+
+                time.sleep(
+                    wait_time
+                )
 
     raise last_error
 
@@ -190,7 +214,7 @@ def get_token_metadata(token):
 
     token = token.lower()
 
-    # Cache sadece başarılı metadata için kullanılıyor.
+    # Daha önce başarıyla alınmışsa tekrar RPC çağrısı yapma
     if token in TOKEN_CACHE:
         return TOKEN_CACHE[token]
 
@@ -219,6 +243,9 @@ def get_token_metadata(token):
             str(e)
         )
 
+    # RPC'yi yormamak için kısa bekleme
+    time.sleep(0.15)
+
     # SYMBOL
     try:
 
@@ -239,6 +266,8 @@ def get_token_metadata(token):
             "|",
             str(e)
         )
+
+    time.sleep(0.15)
 
     # DECIMALS
     try:
@@ -277,8 +306,7 @@ def get_token_metadata(token):
         "decimals": decimals
     }
 
-    # En az decimals başarılıysa cache'e al.
-    # Böylece geçici RPC hatasında None kalıcı olmaz.
+    # Sadece başarılı decimals bilgisini cache'e koy
     if decimals is not None:
 
         TOKEN_CACHE[token] = metadata
