@@ -40,18 +40,13 @@ def get_latest_block():
     return int(block, 16)
 
 
-def get_transfer_logs(block_number):
+def get_block(block_number):
 
     return rpc(
-        "eth_getLogs",
+        "eth_getBlockByNumber",
         [
-            {
-                "fromBlock": hex(block_number),
-                "toBlock": hex(block_number),
-                "topics": [
-                    TRANSFER_TOPIC
-                ]
-            }
+            hex(block_number),
+            True
         ]
     )
 
@@ -61,17 +56,12 @@ def topic_to_address(topic):
     return "0x" + topic[-40:]
 
 
-def is_eoa(address):
+def get_transaction_receipt(tx_hash):
 
-    code = rpc(
-        "eth_getCode",
-        [
-            address,
-            "latest"
-        ]
+    return rpc(
+        "eth_getTransactionReceipt",
+        [tx_hash]
     )
-
-    return code == "0x"
 
 
 def main():
@@ -87,82 +77,123 @@ def main():
         latest
     )
 
-    logs = get_transfer_logs(latest)
+    block = get_block(latest)
 
-    print(
-        "Transfer event sayısı:",
-        len(logs)
+    transactions = block.get(
+        "transactions",
+        []
     )
 
-    checked = set()
-    eoa_count = 0
+    print(
+        "Transaction sayısı:",
+        len(transactions)
+    )
 
     print()
 
-    for log in logs:
+    found = 0
 
-        topics = log.get("topics", [])
+    for tx in transactions:
 
-        if len(topics) < 3:
+        tx_hash = tx.get("hash")
+
+        if not tx_hash:
             continue
 
-        token = log.get("address")
-
-        sender = topic_to_address(
-            topics[1]
+        receipt = get_transaction_receipt(
+            tx_hash
         )
 
-        receiver = topic_to_address(
-            topics[2]
+        logs = receipt.get(
+            "logs",
+            []
         )
 
-        for address in [sender, receiver]:
+        transfers = []
 
-            address = address.lower()
+        for log in logs:
 
-            if address in checked:
+            topics = log.get(
+                "topics",
+                []
+            )
+
+            if len(topics) < 3:
                 continue
 
-            checked.add(address)
+            if topics[0].lower() != TRANSFER_TOPIC:
+                continue
 
-            try:
+            transfers.append({
 
-                if is_eoa(address):
+                "token": log.get("address"),
 
-                    eoa_count += 1
+                "from": topic_to_address(
+                    topics[1]
+                ),
 
-                    print(
-                        "EOA:",
-                        address
-                    )
+                "to": topic_to_address(
+                    topics[2]
+                ),
 
-                    print(
-                        "Token:",
-                        token
-                    )
+                "tx_hash": tx_hash
 
-                    print()
+            })
 
-            except Exception as error:
+        if not transfers:
+            continue
 
-                print(
-                    "EOA kontrol hatası:",
-                    error
-                )
+        found += 1
+
+        print("=" * 70)
+
+        print(
+            "Transaction:",
+            tx_hash
+        )
+
+        print(
+            "Cüzdan:",
+            tx.get("from")
+        )
+
+        print(
+            "Token hareketleri:",
+            len(transfers)
+        )
+
+        for transfer in transfers[:5]:
+
+            print(
+                "Token:",
+                transfer["token"]
+            )
+
+            print(
+                "From:",
+                transfer["from"]
+            )
+
+            print(
+                "To:",
+                transfer["to"]
+            )
+
+            print()
+
+        if found >= 10:
+            break
+
+    print("=" * 70)
 
     print(
-        "Kontrol edilen adres:",
-        len(checked)
-    )
-
-    print(
-        "Bulunan EOA:",
-        eoa_count
+        "İncelenen token işlem örneği:",
+        found
     )
 
     print()
     print(
-        "EOA kontrolü başarılı."
+        "Transaction → Token ilişkisi başarıyla okundu."
     )
 
 
