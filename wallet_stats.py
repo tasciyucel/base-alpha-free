@@ -1,11 +1,15 @@
 import sqlite3
 
+
 DB_PATH = "alpha.db"
 
 
 def main():
 
-    db = sqlite3.connect(DB_PATH)
+    db = sqlite3.connect(
+        DB_PATH
+    )
+
     cur = db.cursor()
 
     cur.execute("""
@@ -27,12 +31,16 @@ def main():
 
     print()
     print("=" * 100)
-    print("WALLET İSTATİSTİKLERİ")
+    print(
+        "WALLET İSTATİSTİKLERİ"
+    )
     print("=" * 100)
 
     if not wallets:
 
-        print("Henüz wallet verisi yok.")
+        print(
+            "Henüz wallet verisi yok."
+        )
 
         db.close()
         return
@@ -51,14 +59,45 @@ def main():
         ) = wallet
 
         print()
-        print("WALLET:", address)
-        print("İşlem sayısı:", trades)
-        print("BUY:", buys)
-        print("SELL:", sells)
-        print("Toplam BUY USD:", buy_usd)
-        print("Toplam SELL USD:", sell_usd)
-        print("İlk görülme:", first_seen)
-        print("Son görülme:", last_seen)
+        print(
+            "WALLET:",
+            address
+        )
+
+        print(
+            "İşlem sayısı:",
+            trades
+        )
+
+        print(
+            "BUY:",
+            buys
+        )
+
+        print(
+            "SELL:",
+            sells
+        )
+
+        print(
+            "Toplam BUY USD:",
+            buy_usd
+        )
+
+        print(
+            "Toplam SELL USD:",
+            sell_usd
+        )
+
+        print(
+            "İlk görülme:",
+            first_seen
+        )
+
+        print(
+            "Son görülme:",
+            last_seen
+        )
 
     print()
     print("=" * 100)
